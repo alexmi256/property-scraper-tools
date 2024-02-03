@@ -152,6 +152,7 @@ class RealtorRawScraper:
                     self.cooldown(success)
 
         logger.info(f"Completed while parsing {total_pages} pages and {len(self.parsed_mls_numbers)} listings")
+        self.api.save_cookies()
 
 
 scraper = RealtorRawScraper()

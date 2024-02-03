@@ -23,7 +23,7 @@ class RealtorAPI:
 
     def load_cookies(self):
         with open(self.cookies_file, "r") as f:
-            return "".join(f.readlines())
+            return str(f.readline().strip())
 
     def get_coordinates(self, city):
         """Gets the coordinate bounds of a city from OpenStreetMap."""

@@ -1,6 +1,10 @@
 # What
 Scrape realtor.ca listing data and ~~efficiently~~ store them in an SQLite database.
 
+# Why
+* The filters on realtor.ca are terrible
+* To track price changes and visualize them
+
 # How
 ## raw_sqlite_dump.py
 Responses are requested for an area and stored in a SQLite `mls_raw_{str(date.today())}.db` database file with the following structure:
@@ -30,6 +34,7 @@ This uses a database created above and does the following:
 - [ ] Separate hardcoded functions in JSONtoSQL to a config file
 - [ ] Compare raw JSON text to split tables of JSON
 - [ ] Compare split tables of JSON with new SQLite JSONB extension
+- [ ] Use logging instead of printing
 - [ ] Figure out multi-day data storage
 
 # Thanks
