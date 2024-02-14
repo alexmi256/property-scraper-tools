@@ -167,3 +167,7 @@ realtorca.py
 schema.txt
 merge_test.py
 cookies.txt
+flatten_test.py
+*.sql
+schema_counters.txt
+cookies.py

@@ -1,29 +1,38 @@
 """ Contains all queries to the Realtor.ca API and OpenStreetMap."""
 
 import requests
-
+import json
 
 class RealtorAPI:
-    def __init__(self, cookies_file: str = "cookies.txt"):
+    def __init__(self, cookies_file: str = "cookies.json"):
         self.cookies_file = cookies_file
         self.session = requests.Session()
         cookies = self.load_cookies()
+        requests.utils.add_dict_to_cookiejar(self.session.cookies, cookies)
         headers = {
             "Referer": "https://www.realtor.ca/",
             "Origin": "https://www.realtor.ca/",
             "Host": "api2.realtor.ca",
-            "Cookie": cookies,
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
         }
         self.session.headers.update(headers)
 
     def save_cookies(self):
+        # FIXME: No idea if this actually works
         with open(self.cookies_file, "w") as f:
-            f.write(self.session.cookies)
+            json.dump(requests.utils.dict_from_cookiejar(self.session.cookies), f)
 
-    def load_cookies(self):
+    def load_cookies(self) -> dict:
         with open(self.cookies_file, "r") as f:
-            return str(f.readline().strip())
+            try:
+                cookies_dict = json.load(f)
+                return cookies_dict
+            except json.decoder.JSONDecodeError:
+                f.seek(0)
+                cookies_string = f.readline()
+                cookies_dict = {k: v for k, v in [x.strip().split('=', 1) for x in cookies_string.split(';')]}
+                return cookies_dict
+
 
     def get_coordinates(self, city):
         """Gets the coordinate bounds of a city from OpenStreetMap."""
