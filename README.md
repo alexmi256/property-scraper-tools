@@ -34,6 +34,66 @@ This uses a database created above and does the following:
 4. split_lists_from_item: Splits up the schema dict so that all list items will be their own separate entry
 5. print_schema_for_item: Flattens the schema dicts and prints out SQLite code to create appropriate tables
 
+### Why
+The response data returned by some servers is a giant JSON blob.
+If we want to efficiently store this data in a relational database then we need to analyze it, split it up, 
+and determine an appropriate schema.
+
+This script can help with that process.
+
+You could ofcourse use a NoSQL solution to store the data directly or even store the blob as a string but there are some things to consider listed below.
+
+Even though I've targeted SQLite as the DB of choice for portability/accessibility I think this was probably a poor and limiting choice.
+
+#### Comparisons
+**SQLite Pros**
+- Super simple, even has [Fiddle](https://sqlite.org/fiddle/)
+- Can share DBs
+- Can even place a DBs online as a file and access it
+- 
+**SQLite Cons**
+- Limited support for data types (IMO)
+  - I realize this is an intentional tradeoff but it means you're going to need to handle a bunch more cases in queries or code
+- I have no idea how to efficiently store time series/event data
+- No plugins for complex functionality like [PostGIS](https://postgis.net/), your code will need logic for this
+
+##### Raw JSON storage as TEXT in SQlite
+**Pros**
+- Super simple
+- Super quick to do
+
+**Cons**
+- Need to understand response schema and how to deal with it
+- Long queries since you need to destructure data every time you access it
+- If you have poorly structured JSON where every value is formatted as a string, you'll have even longer queries and embedded logic for how to handle specific data
+- Largest storage size (95M)
+##### Raw JSON storage as JSONB in SQlite
+**Pros**
+- Reduces storage space by x (95M -> XXM)
+
+**Cons**
+- Requires SQLite +3.45.0 which probably won't be supported on most systems as of yet
+- Doesn't actually help with JSON queries
+##### JSONtoSQLAnalyzer in SQlite
+**Pros**
+- Reduces storage space by 2.7x (95M -> 35M)
+- Makes data more relational
+- Simplifies queries a bit 
+- Could also be ported to other DBs
+
+**Cons**
+- Still need to understand schema
+- You'll need to write custom code to clean up the response data so that the data can be stored
+##### JSONtoSQLAnalyzer with automatic datatype guessing in SQlite
+**Pros**
+- It's free to do
+- Automatically tries to guess data types for column values
+
+**Cons**
+- Not perfect, logic for some data types will still live in queries/code
+
+**Neutral**
+- Further separates raw response data from stored response data
 
 ### Example Usage
 #### Analyzing JSON Structure
@@ -225,14 +285,12 @@ INSERT OR IGNORE INTO Listings ('Id', 'MlsNumber', 'PublicRemarks', 'Building_St
 ```
 
 # TODO
-- [x] Fix the dict merging so that lists are not merged with key numbers
-- [x] Test out cookies to ensure they work as expected
-- [x] Support both JSON and text cookies
 - [ ] Separate hardcoded functions in JSONtoSQL to a config file
 - [ ] Automatic attempts for type conversion for each key value
-- [ ] Compare raw JSON text to split tables of JSON
+- [x] Compare raw JSON text to split tables of JSON
+- [ ] Split off `JSONtoSQLAnalyzer` to its own repo
 - [ ] Compare split tables of JSON with new SQLite JSONB extension
-- [ ] Use logging instead of printing
+- [x] Use logging instead of printing
 - [ ] Figure out multi-day data storage
 
 # Thanks

@@ -7,11 +7,16 @@ from sortedcontainers import SortedDict
 from collections import Counter
 import functools
 from deepmerge import Merger, STRATEGY_END
-from pprint import pprint
-from json import dumps
 import collections
+import time
+import logging
+from utils import SQLITE_RESERVED_WORDS, PYTHON_TO_SQLITE_DATA_TYPES
 
-SQLITE_RESERVED_WORDS = ["ABORT","ACTION","ADD","AFTER","ALL","ALTER","ALWAYS","ANALYZE","AND","AS","ASC","ATTACH","AUTOINCREMENT","BEFORE","BEGIN","BETWEEN","BY","CASCADE","CASE","CAST","CHECK","COLLATE","COLUMN","COMMIT","CONFLICT","CONSTRAINT","CREATE","CROSS","CURRENT","CURRENT_DATE","CURRENT_TIME","CURRENT_TIMESTAMP","DATABASE","DEFAULT","DEFERRABLE","DEFERRED","DELETE","DESC","DETACH","DISTINCT","DO","DROP","EACH","ELSE","END","ESCAPE","EXCEPT","EXCLUDE","EXCLUSIVE","EXISTS","EXPLAIN","FAIL","FILTER","FIRST","FOLLOWING","FOR","FOREIGN","FROM","FULL","GENERATED","GLOB","GROUP","GROUPS","HAVING","IF","IGNORE","IMMEDIATE","IN","INDEX","INDEXED","INITIALLY","INNER","INSERT","INSTEAD","INTERSECT","INTO","IS","ISNULL","JOIN","KEY","LAST","LEFT","LIKE","LIMIT","MATCH","MATERIALIZED","NATURAL","NO","NOT","NOTHING","NOTNULL","NULL","NULLS","OF","OFFSET","ON","OR","ORDER","OTHERS","OUTER","OVER","PARTITION","PLAN","PRAGMA","PRECEDING","PRIMARY","QUERY","RAISE","RANGE","RECURSIVE","REFERENCES","REGEXP","REINDEX","RELEASE","RENAME","REPLACE","RESTRICT","RETURNING","RIGHT","ROLLBACK","ROW","ROWS","SAVEPOINT","SELECT","SET","TABLE","TEMP","TEMPORARY","THEN","TIES","TO","TRANSACTION","TRIGGER","UNBOUNDED","UNION","UNIQUE","UPDATE","USING","VACUUM","VALUES","VIEW","VIRTUAL","WHEN","WHERE","WINDOW","WITH","WITHOUT",]
+logging.basicConfig(level=logging.DEBUG)
+
+logger = logging.getLogger(__name__)
+
+
 
 # GENERATE_DICT_VALUE_VIA_XXHASH = lambda _, item_dict: xxhash.xxh32(str(SortedDict(item_dict))).intdigest()
 #
@@ -19,13 +24,7 @@ SQLITE_RESERVED_WORDS = ["ABORT","ACTION","ADD","AFTER","ALL","ALTER","ALWAYS","
 #
 # KEEP_ONLY_FIRST_LIST_ITEM = lambda item_list: next((x for x in item_list), {})
 
-PYTHON_TO_SQLITE_DATA_TYPES = {
-    "int": "INTEGER",
-    "str": "TEXT",
-    "float": "REAL",
-    'list': 'TEXT',
-    # 'list': 'JSONB',
-}
+
 
 
 def merge_counters(config, path, base, nxt):
@@ -138,11 +137,7 @@ class JSONtoSQLAnalyzer:
         return dict(items)
 
     def modify_dict(
-        self,
-        item: dict,
-        item_path: list[str] | None = None,
-        came_from_a_list: bool = False,
-        config: dict = None
+        self, item: dict, item_path: list[str] | None = None, came_from_a_list: bool = False, config: dict = None
     ):
         """
         This function modifies the dict in place to either simplify IDs or reduce lists of items
@@ -161,7 +156,7 @@ class JSONtoSQLAnalyzer:
         current_dict_path = f'{".".join(item_path)}'
 
         # if 'Phones' in item:
-        #     print(f"Current path is: {current_dict_path}")
+        #     logger.debug(f"Current path is: {current_dict_path}")
 
         if current_dict_path == "$":
             for key_name in ["Media", "Tags", "OpenHouse"]:
@@ -218,13 +213,12 @@ class JSONtoSQLAnalyzer:
                         self.modify_dict(dict_in_list, item_path + [key], True, config)
                 else:
                     # This complicates life a lot and we hope it won't happen
-                    pass
-                    # print(
-                    #     f'{current_dict_path} Key "{key}" has a value of type {type(value)} which is currently unsupported'
-                    # )
+                    logger.warning(
+                        f'{current_dict_path} Key "{key}" has a value of type {type(value)} which is currently unsupported'
+                    )
 
             elif isinstance(value, dict):
-                # print(f'{current_dict_path} Key "{key}" has a value of type dict')
+                logger.debug(f'{current_dict_path} Key "{key}" has a value of type dict')
                 # If it's a dict we need to go through this whole loop again
                 self.modify_dict(value, item_path + [key], False, config)
 
@@ -233,7 +227,7 @@ class JSONtoSQLAnalyzer:
         item: dict,
         item_path: list[str] | None = None,
         came_from_a_list: bool = False,
-        counter_to_string: bool = False
+        counter_to_string: bool = False,
     ):
         """
         This function modifies the dict in place so that all values are Counters of the value types
@@ -262,10 +256,9 @@ class JSONtoSQLAnalyzer:
                         self.modify_dict_to_counter_types(dict_in_list, item_path + [key], True, counter_to_string)
                 else:
                     # This complicates life a lot and we hope it won't happen
-                    pass
-                    # print(
-                    #     f'{current_dict_path} Key "{key}" has a value of type {type(value)} which is currently unsupported'
-                    # )
+                    logger.warning(
+                        f'{current_dict_path} Key "{key}" has a value of type {type(value)} which is currently unsupported'
+                    )
 
             elif isinstance(value, dict):
                 # If it's a dict we need to go through this whole loop again
@@ -276,11 +269,7 @@ class JSONtoSQLAnalyzer:
                 item[key] = Counter([type(value).__name__])
 
     def split_lists_from_item(
-        self,
-        item: dict,
-        item_path: list[str] | None = None,
-        flatten=True,
-        items_to_create: dict | None = None
+        self, item: dict, item_path: list[str] | None = None, flatten=True, items_to_create: dict | None = None
     ):
         if items_to_create is None:
             items_to_create = {}
@@ -293,31 +282,37 @@ class JSONtoSQLAnalyzer:
 
         current_item_path = f'{".".join(item_path)}'
 
-        # print(f"Current path is: {current_item_path}")
+        logger.debug(f"Current path is: {current_item_path}")
 
         dicts_to_create = []
 
-        removable_keys = [k for k, v in item.items() if (isinstance(v, list) or isinstance(v, dict)) and type(v) is not Counter]
+        removable_keys = [
+            k for k, v in item.items() if (isinstance(v, list) or isinstance(v, dict)) and type(v) is not Counter
+        ]
         for key_name in removable_keys:
             object_value = item.pop(key_name)
             if type(object_value) is list:
                 for list_item in object_value:
-                    dicts_to_create.append({'key_name': key_name, 'came_from_a_list': True, 'key_value': list_item})
+                    dicts_to_create.append({"key_name": key_name, "came_from_a_list": True, "key_value": list_item})
             elif type(object_value) is dict:
-                dicts_to_create.append({'key_name': key_name, 'came_from_a_list': False, 'key_value': object_value})
+                dicts_to_create.append({"key_name": key_name, "came_from_a_list": False, "key_value": object_value})
             else:
-                raise Exception(f'Item dict had a removable value type that was neither a list nor a dict: {type(object_value)}')
+                raise Exception(
+                    f"Item dict had a removable value type that was neither a list nor a dict: {type(object_value)}"
+                )
 
         for dict_item in dicts_to_create:
-            new_item_path = item_path + [dict_item['key_name']]
-            if dict_item['came_from_a_list']:
-                new_item_path.append('[]')
-            discovered_item_id = self.split_lists_from_item(dict_item['key_value'], item_path=new_item_path, flatten=flatten, items_to_create=items_to_create)
+            new_item_path = item_path + [dict_item["key_name"]]
+            if dict_item["came_from_a_list"]:
+                new_item_path.append("[]")
+            discovered_item_id = self.split_lists_from_item(
+                dict_item["key_value"], item_path=new_item_path, flatten=flatten, items_to_create=items_to_create
+            )
 
-            if dict_item['key_name'] not in item:
-                item[dict_item['key_name']] = []
+            if dict_item["key_name"] not in item:
+                item[dict_item["key_name"]] = []
 
-            item[dict_item['key_name']].append(discovered_item_id)
+            item[dict_item["key_name"]].append(discovered_item_id)
 
         # NOTE: While we could generate keys automatically here or in get_dict_id_keys this would likely result in
         # our predetermined schema breaking
@@ -330,8 +325,7 @@ class JSONtoSQLAnalyzer:
 
         items_to_create[current_item_path].append(item)
 
-        return item.get(determined_item_id_key, 'NO_ID_FOR_KEY')
-
+        return item.get(determined_item_id_key, "NO_ID_FOR_KEY")
 
     def merge_items_to_determine_db_schema(self):
         """
@@ -360,7 +354,7 @@ class JSONtoSQLAnalyzer:
         merged_items = {}
 
         functools.reduce(lambda a, b: custom_merger.merge(a, b), items, merged_items)
-        # print(dumps(merged_items, indent=2))
+        # logger.debug(dumps(merged_items, indent=2))
 
         return merged_items
 
@@ -369,22 +363,63 @@ class JSONtoSQLAnalyzer:
 
         for listing in listings:
             self.modify_dict(listing)
-            self.print_sqlite_sql_for_insertion(listing, 'Listings')
+            self.print_sqlite_sql_for_insertion(listing, "Listings")
 
     def print_sqlite_sql_for_insertion(self, merged_item, default_table_key_name: str = "items"):
         created_items = {}
         self.split_lists_from_item(merged_item, items_to_create=created_items)
 
         for item_path, items_to_create in created_items.items():
-            path_without_arrays = [x for x in item_path.split('.') if x != '[]']
-            table_name = default_table_key_name if item_path == '$' else path_without_arrays[-1]
+            path_without_arrays = [x for x in item_path.split(".") if x != "[]"]
+            table_name = default_table_key_name if item_path == "$" else path_without_arrays[-1]
 
             for dict_item in items_to_create:
-                item_keys = [f'`{x}`' if x in SQLITE_RESERVED_WORDS else x for x in dict_item.keys()]
+                item_keys = [f"`{x}`" if x in SQLITE_RESERVED_WORDS else x for x in dict_item.keys()]
                 item_values = [str(x) if isinstance(x, list) else x for x in dict_item.values()]
                 # FIXME: Quoting is completely broken atm
-                sql_str = f'INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {tuple(item_values)};'
+                sql_str = f"INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {tuple(item_values)};"
                 print(sql_str)
+
+    def insert_into_new_database(
+        self, new_db_name: str | None = None, limit: int = -1, default_table_key_name: str = "Listings"
+    ):
+        listings = self.get_items_from_db(limit)
+        if new_db_name is None:
+            new_db_name = f"mls_raw_{int(time.time())}.db"
+
+        with closing(sqlite3.connect(f"test_db.db")) as connection:
+            with closing(connection.cursor()) as cursor:
+                query = """
+                CREATE TABLE IF NOT EXISTS Phones(PhoneType TEXT, PhoneNumber TEXT, AreaCode TEXT, PhoneTypeId TEXT, PhonesGeneratedId INTEGER PRIMARY KEY, Extension TEXT);
+                CREATE TABLE IF NOT EXISTS Organization(OrganizationID INTEGER PRIMARY KEY, Name TEXT, Logo TEXT, Address_AddressText TEXT, Address_PermitShowAddress TEXT, Emails TEXT, Websites TEXT, OrganizationType TEXT, Designation TEXT, HasEmail TEXT, PermitFreetextEmail TEXT, PermitShowListingLink TEXT, RelativeDetailsURL TEXT, PhotoLastupdate TEXT, Phones TEXT);
+                CREATE TABLE IF NOT EXISTS Individual(IndividualID INTEGER PRIMARY KEY, Name TEXT, Websites TEXT, Emails TEXT, Photo TEXT, Position TEXT, PermitFreetextEmail TEXT, FirstName TEXT, LastName TEXT, CorporationName TEXT, CorporationDisplayTypeId TEXT, PermitShowListingLink TEXT, RelativeDetailsURL TEXT, AgentPhotoLastUpdated TEXT, PhotoHighRes TEXT, RankMyAgentKey TEXT, RealSatisfiedKey TEXT, TestimonialTreeKey TEXT, CorporationType TEXT, CccMember TEXT, EducationCredentials TEXT, Organization TEXT, Phones TEXT);
+                CREATE TABLE IF NOT EXISTS Property_Photo(SequenceId TEXT NOT NULL, HighResPath TEXT NOT NULL, MedResPath TEXT NOT NULL, LowResPath TEXT NOT NULL, Description TEXT, LastUpdated TEXT NOT NULL, TypeId TEXT NOT NULL, PhotoGeneratedId INTEGER PRIMARY KEY NOT NULL, SvgPath TEXT);
+                CREATE TABLE IF NOT EXISTS Media(MediaCategoryId TEXT, MediaCategoryURL TEXT, Description TEXT, `Order` INTEGER, MediaGeneratedId INTEGER PRIMARY KEY, VideoType TEXT);
+                CREATE TABLE IF NOT EXISTS Tags(Label TEXT, HTMLColorCode TEXT, ListingTagTypeID TEXT, TagsGeneratedId INTEGER PRIMARY KEY);
+                CREATE TABLE IF NOT EXISTS OpenHouse(StartTime TEXT, StartDateTime TEXT, EndDateTime TEXT, FormattedDateTime TEXT, EventTypeID TEXT, OpenHouseGeneratedId INTEGER PRIMARY KEY);
+                CREATE TABLE IF NOT EXISTS Listings(Id TEXT PRIMARY KEY NOT NULL, MlsNumber TEXT NOT NULL, PublicRemarks TEXT NOT NULL, Building_StoriesTotal TEXT NOT NULL, Building_BathroomTotal TEXT, Building_Bedrooms TEXT, Building_Type TEXT, Building_UnitTotal TEXT, Building_SizeInterior TEXT, Building_SizeExterior TEXT, Property_Price TEXT NOT NULL, Property_Type TEXT NOT NULL, Property_Address_AddressText TEXT NOT NULL, Property_Address_Longitude TEXT NOT NULL, Property_Address_Latitude TEXT NOT NULL, Property_Address_PermitShowAddress TEXT NOT NULL, Property_TypeId TEXT NOT NULL, Property_FarmType TEXT, Property_ZoningType TEXT, Property_PriceUnformattedValue TEXT NOT NULL, Property_AmmenitiesNearBy TEXT, Property_Parking TEXT, Property_ParkingSpaceTotal TEXT, Property_ParkingType TEXT, Property_OwnershipType TEXT, Property_LeaseRent TEXT, Property_LeaseRentUnformattedValue TEXT, Land_SizeTotal TEXT, Land_SizeFrontage TEXT, AlternateURL_DetailsLink TEXT, AlternateURL_VideoLink TEXT, PostalCode TEXT NOT NULL, HistoricalDataIsCleared TEXT NOT NULL, ProvinceName TEXT NOT NULL, RelativeDetailsURL TEXT NOT NULL, StatusId TEXT NOT NULL, StandardStatusId TEXT, PhotoChangeDateUTC TEXT, Distance TEXT NOT NULL, RelativeURLEn TEXT NOT NULL, RelativeURLFr TEXT NOT NULL, InsertedDateUTC TEXT NOT NULL, TimeOnRealtor TEXT NOT NULL, UploadedBy INTEGER NOT NULL, PriceChangeDateUTC TEXT, OpenHouseInsertDateUTC TEXT, HasOpenHouseUpdate TEXT, ListingTimeZone TEXT, ListingBoundary TEXT, ListingGMT TEXT, HasNewImageUpdate TEXT, HasPriceUpdate TEXT, Individual TEXT, Property_Photo TEXT, Media TEXT, Tags TEXT, OpenHouse TEXT);
+                """
+                cursor.executescript(query)
+
+                for listing in listings:
+                    self.modify_dict(listing)
+                    created_items = {}
+                    self.split_lists_from_item(listing, items_to_create=created_items)
+
+                    for item_path, items_to_create in created_items.items():
+                        path_without_arrays = [x for x in item_path.split(".") if x != "[]"]
+                        table_name = default_table_key_name if item_path == "$" else path_without_arrays[-1]
+
+                        for dict_item in items_to_create:
+                            item_keys = [f"`{x}`" if x in SQLITE_RESERVED_WORDS else x for x in dict_item.keys()]
+                            item_values = [str(x) if isinstance(x, list) else x for x in dict_item.values()]
+                            item_values_template = str(tuple(["?"] * len(item_values))).replace("'", "")
+
+                            sql_str = (
+                                f"INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {item_values_template};"
+                            )
+                            cursor.execute(sql_str, item_values)
+            connection.commit()
 
     def print_schema_for_item(self, merged_item, default_table_key_name: str = "items"):
         num_items_in_db = self.get_items_count_from_db()
@@ -395,8 +430,8 @@ class JSONtoSQLAnalyzer:
         created_paths = set()
 
         for item_path, items_to_create in results.items():
-            path_without_arrays = [x for x in item_path.split('.') if x != '[]']
-            table_name = default_table_key_name if item_path == '$' else path_without_arrays[-1]
+            path_without_arrays = [x for x in item_path.split(".") if x != "[]"]
+            table_name = default_table_key_name if item_path == "$" else path_without_arrays[-1]
 
             # WARN: You may want to disable this and deal with table names differently
             #  In cases where you can come across the same object types at different keys it makes sense to ignore
@@ -411,7 +446,7 @@ class JSONtoSQLAnalyzer:
                 columns = []
                 for column_name, column_type_counter in dict_item.items():
                     if column_type_counter is None:
-                        print(
+                        logger.error(
                             f"Column {column_name} has unknown data type and thus is messing up data and needs to be dealt with"
                         )
                         continue
@@ -427,24 +462,24 @@ class JSONtoSQLAnalyzer:
                         # if len(column_type_counter) == 1 and column_type_counter[0] is not None:
                         #     most_common_type_for_column = column_type_counter[0].most_common(1)
                         # elif len(column_type_counter) > 1 and column_type_counter[0] is not None:
-                        #     print(f'Column {column_name} had a list with multiple counter items which is unexpected, will use the first one')
+                        #     logger.warning(f'Column {column_name} had a list with multiple counter items which is unexpected, will use the first one')
                         #     most_common_type_for_column = column_type_counter[0].most_common(1)
                         # else:
-                        #     print(f'Column {column_name} had an empty list (or a list of None items) which means we cannot know its type, will assume str:TEXT')
+                        #     logger.warning(f'Column {column_name} had an empty list (or a list of None items) which means we cannot know its type, will assume str:TEXT')
                         #     most_common_type_for_column = [('str', 0)]
-                        most_common_type_for_column = [('list', 0)]
+                        most_common_type_for_column = [("list", 0)]
                     else:
                         most_common_type_for_column = column_type_counter.most_common(1)
 
                     if not most_common_type_for_column:
-                        print("failed...")
+                        logger.error(f"Failed to determine a data type for column {column_name}")
                     sql_column_type = PYTHON_TO_SQLITE_DATA_TYPES.get(most_common_type_for_column[0][0], "TEXT")
 
                     # WARN: For large sample sizes this is ok but could be error prone by bad luck or small sample sizes
                     should_be_not_null = "NOT NULL" if int(most_common_type_for_column[0][1]) == num_items_in_db else ""
 
                     if column_name.upper() in SQLITE_RESERVED_WORDS:
-                        column_name = f'`{column_name}`'
+                        column_name = f"`{column_name}`"
 
                     creation_text = re.sub(
                         r"\s+",
@@ -475,7 +510,7 @@ config = {
 
 analyzer = JSONtoSQLAnalyzer("mls_raw_2024-01-31.db", config)
 
-analyzer.generate_sqlite_sql_for_insertion()
+# analyzer.generate_sqlite_sql_for_insertion()
 
 # listings = analyzer.get_items_from_db(1)
 #
@@ -485,5 +520,5 @@ analyzer.generate_sqlite_sql_for_insertion()
 #     pass
 
 # merged_item = analyzer.merge_items_to_determine_db_schema()
-#pprint(merged_item)
-#analyzer.print_schema_for_item(merged_item, default_table_key_name='Listings')
+# pprint(merged_item)
+# analyzer.print_schema_for_item(merged_item, default_table_key_name='Listings')
