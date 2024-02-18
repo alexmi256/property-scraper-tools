@@ -24,15 +24,20 @@ Responses are requested for an area and stored in a SQLite `mls_raw_{str(date.to
 where `id` is the MLS id and `details` is the raw JSON response for each listing
 
 ## JSONtoSQLAnalyzer
-This uses a database created above and does the following:
-1. modify_dict: Modfies each listing in place to:
-  * Add a unique generatedID based on xxhashed contents for items missing ID like keys
-  * Make some lists text objects as they're too small to be stored
-  * Delete some useless keys
-2. modify_dict_to_counter_types: Looks at all modified listings and converts key values into Counter objects
-3. merge_items_to_determine_db_schema: Merges all modified items into one object so we can determine a schema
-4. split_lists_from_item: Splits up the schema dict so that all list items will be their own separate entry
-5. print_schema_for_item: Flattens the schema dicts and prints out SQLite code to create appropriate tables
+This uses a database created above. The main code flow occurs in `convert_raw_json_db_to_sqlite`
+```txt
+convert_raw_json_db_to_sqlite
+  get_items_from_db
+  get_sqlite_sql_for_dbschema_from_raw_items
+    get_items_from_db
+    modify_dict
+    modify_dict_to_counter_types
+    get_sqlite_sql_for_merged_counter_dict
+      get_items_count_from_db
+      split_lists_from_item
+  modify_dict
+  split_lists_from_item
+```
 
 ### Why
 The response data returned by some servers is a giant JSON blob.

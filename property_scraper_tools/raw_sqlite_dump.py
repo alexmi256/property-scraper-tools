@@ -1,17 +1,16 @@
 import json
+import logging
 import sqlite3
 from contextlib import closing
-from time import sleep
-from random import randint
-from requests import HTTPError
-import logging
-from math import ceil
-from tqdm import tqdm
-from pprint import pformat
 from datetime import date
-
+from math import ceil
+from pprint import pformat
+from random import randint
+from time import sleep
 
 from queries import RealtorAPI
+from requests import HTTPError
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -96,7 +95,9 @@ class RealtorRawScraper:
 
         try:
             # Parse the first page because it contains details about how many pages there are
-            response = self.api.get_property_list(latitude_min, latitude_max, longitude_min, longitude_max, current_page=1)
+            response = self.api.get_property_list(
+                latitude_min, latitude_max, longitude_min, longitude_max, current_page=1
+            )
 
             total_pages = ceil(response["Paging"]["TotalRecords"] / response["Paging"]["RecordsPerPage"])
             self.write_response_results_to_db(response, current_date)

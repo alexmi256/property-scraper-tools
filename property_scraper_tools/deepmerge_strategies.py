@@ -1,6 +1,8 @@
-from collections import Counter
 import functools
-from deepmerge import Merger, STRATEGY_END
+from collections import Counter
+
+from deepmerge import STRATEGY_END, Merger
+
 
 def merge_counters(config, path, base, nxt):
     """

@@ -1,17 +1,18 @@
+import collections
+import functools
+import json
+import logging
 import re
 import sqlite3
-import json
-from contextlib import closing
-import xxhash
-from sortedcontainers import SortedDict
-from collections import Counter
-import functools
-from deepmerge import Merger
-import collections
 import time
-import logging
-from utils import SQLITE_RESERVED_WORDS, PYTHON_TO_SQLITE_DATA_TYPES
+from collections import Counter
+from contextlib import closing
+
+import xxhash
+from deepmerge import Merger
 from deepmerge_strategies import merge_counters, merge_lists_with_dict_items
+from sortedcontainers import SortedDict
+from utils import PYTHON_TO_SQLITE_DATA_TYPES, SQLITE_RESERVED_WORDS
 
 logging.basicConfig(level=logging.INFO)
 
@@ -33,12 +34,11 @@ class JSONtoSQLAnalyzer:
         self.config = config or {}
         self.db_file = db_file
 
-    def get_items_from_db(self, limit: int = -1):
+    def get_items_from_db(self, limit: int = -1) -> list[dict]:
         """
-        Open a previosuly saved raw DB and return the top X rows
+        Open a previously saved raw DB and return the top X rows
 
         :param limit: Amount of rows to fetch
-        :param db_file:
         :return:
         """
         with closing(sqlite3.connect(self.db_file)) as connection:
@@ -46,7 +46,11 @@ class JSONtoSQLAnalyzer:
                 rows = cursor.execute(f"SELECT details from listings LIMIT {limit}").fetchall()
                 return [json.loads(x[0]) for x in rows]
 
-    def get_items_count_from_db(self):
+    def get_items_count_from_db(self) -> int:
+        """
+        Get the number of items in the DB
+        :return:
+        """
         with closing(sqlite3.connect(self.db_file)) as connection:
             with closing(connection.cursor()) as cursor:
                 return cursor.execute(f"SELECT COUNT(*) from listings").fetchone()[0]
@@ -58,6 +62,12 @@ class JSONtoSQLAnalyzer:
 
     @staticmethod
     def get_dict_id_keys(item: dict) -> list[str]:
+        """
+        Return a list of keys which are likely to be the ID key for the given dict
+
+        :param item:
+        :return:
+        """
         # This regex is funky like this because a key ending with "ID" should get precedence over a key with "Id"
         potential_ids = [re.search(r".+GeneratedId|^[iI][dD]$|.+[a-z]ID|.+Id$", x) for x in item.keys()]
         potential_ids = [x.group() for x in potential_ids if x]
@@ -69,7 +79,7 @@ class JSONtoSQLAnalyzer:
         return potential_ids
 
     @staticmethod
-    def flatten(dictionary, parent_key=False, separator="_"):
+    def flatten(dictionary: dict, parent_key: bool = False, separator: str = "_") -> dict:
         """
         Turn a nested dictionary into a flattened dictionary
         https://stackoverflow.com/questions/6027558/flatten-nested-dictionaries-compressing-keys
@@ -101,10 +111,16 @@ class JSONtoSQLAnalyzer:
 
     def modify_dict(
         self, item: dict, item_path: list[str] | None = None, came_from_a_list: bool = False, config: dict = None
-    ):
+    ) -> None:
         """
-        This function modifies the dict in place to either simplify IDs or reduce lists of items
+        This function modifies the dict in place with various functions that are currently hardcoded
 
+        The goal is to convert an unwieldy JSON text blob dict into something we can store into a relation SQL SB
+        This usually requires that we do a bunch of changes to it
+
+        TODO: Remove the hardcoded functions here and somehoe use a config dict
+
+        :param config:
         :param item:
         :param item_path:
         :param came_from_a_list:
@@ -191,10 +207,11 @@ class JSONtoSQLAnalyzer:
         item_path: list[str] | None = None,
         came_from_a_list: bool = False,
         counter_to_string: bool = False,
-    ):
+    ) -> None:
         """
         This function modifies the dict in place so that all values are Counters of the value types
-
+        This is only useful when analyzing a large dataset so that we can see the data type consistency for each column
+        If we end up with multiple types in the Counters it means the data is inconsistent
 
         :param item:
         :param item_path:
@@ -233,7 +250,24 @@ class JSONtoSQLAnalyzer:
 
     def split_lists_from_item(
         self, item: dict, item_path: list[str] | None = None, flatten=True, items_to_create: dict | None = None
-    ):
+    ) -> int | str:
+        """
+        Splits up the given item into the given items_to_create dict so that each key will have a list of items to create
+        WARNING: This flattens dicts by default
+
+        Currently this function is pretty wonky
+        Ideally it returns the ID value which should be an int or str
+        If data is not pretreated it could end up being something else and which will have unintended consequences
+        To add to the wonkyness, it's the 'items_to_create' dict you pass in which gets modified in-place that will have
+        the results you're looking for.
+        TODO: Make this return a tuple of (actual desired data dict, id for the current item)
+
+        :param item:
+        :param item_path:
+        :param flatten:
+        :param items_to_create:
+        :return:
+        """
         if items_to_create is None:
             items_to_create = {}
 
@@ -290,17 +324,15 @@ class JSONtoSQLAnalyzer:
 
         return item.get(determined_item_id_key, "NO_ID_FOR_KEY")
 
-    def merge_items_to_determine_db_schema(self):
-        """
-        Converts all row values to their object type and then merges all rows into one super row
-        This allows us to see all possible keys that will exist for a scraped dataset
-
-        :return:
-        """
+    def get_sqlite_sql_for_dbschema_from_raw_items(self) -> list[str]:
+        # The items are the raw JSON blobs converted to dicts
         items = self.get_items_from_db()
+
         for item in items:
-            # This is needed when we want to do modifications to the data such as adding GeneratedIDs or reducing number of lists
+            # Modify the item so that it will fit into a relational db better
+            # i.e. Adding GeneratedIDs, making some list become dicts, etc...
             self.modify_dict(item)
+            # Modify the dict so that each value is a Counter with the data types
             self.modify_dict_to_counter_types(item)
 
         custom_merger = Merger(
@@ -316,20 +348,36 @@ class JSONtoSQLAnalyzer:
 
         merged_items = {}
 
+        # Merge all the items into one which will now have Counter of data types so that we can see data consistency
         functools.reduce(lambda a, b: custom_merger.merge(a, b), items, merged_items)
         # logger.debug(dumps(merged_items, indent=2))
 
-        return merged_items
+        tables_to_create = self.get_sqlite_sql_for_merged_counter_dict(merged_items, default_table_key_name="Listings")
+        return tables_to_create
 
-    def generate_sqlite_sql_for_insertion(self, limit=1):
+    def generate_sqlite_sql_for_insertion(self, limit: int = 1) -> None:
+        """
+        Queries raw DB items, modifies them, and then prints out SQLite code for inserting said items into a relational DB based on previously determined schema
+        FIXME: Currently broken due to quotes
+        :param limit:
+        :return:
+        """
         listings = self.get_items_from_db(limit)
 
         for listing in listings:
             self.modify_dict(listing)
             self.print_sqlite_sql_for_insertion(listing, "Listings")
 
-    def print_sqlite_sql_for_insertion(self, merged_item, default_table_key_name: str = "items"):
+    def print_sqlite_sql_for_insertion(self, merged_item, default_table_key_name: str = "items") -> None:
+        """
+        Prints out SQLite code for inserting given item into a relational DB based on previously determined schema
+        FIXME: This is broken because quotation is hard
+        :param merged_item:
+        :param default_table_key_name:
+        :return:
+        """
         created_items = {}
+        # WARNING: This is what flattens our dict item by default
         self.split_lists_from_item(merged_item, items_to_create=created_items)
 
         for item_path, items_to_create in created_items.items():
@@ -343,30 +391,27 @@ class JSONtoSQLAnalyzer:
                 sql_str = f"INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {tuple(item_values)};"
                 print(sql_str)
 
-    def insert_into_new_database(
+    def convert_raw_json_db_to_sqlite(
         self, new_db_name: str | None = None, limit: int = -1, default_table_key_name: str = "Listings"
     ):
+        # These listings are the ones that will get inserted
         listings = self.get_items_from_db(limit)
         if new_db_name is None:
             new_db_name = f"mls_raw_{int(time.time())}.db"
 
         with closing(sqlite3.connect(f"{new_db_name}")) as connection:
             with closing(connection.cursor()) as cursor:
-                query = """
-                CREATE TABLE IF NOT EXISTS Phones(PhoneType TEXT, PhoneNumber TEXT, AreaCode TEXT, PhoneTypeId TEXT, PhonesGeneratedId INTEGER PRIMARY KEY, Extension TEXT);
-                CREATE TABLE IF NOT EXISTS Organization(OrganizationID INTEGER PRIMARY KEY, Name TEXT, Logo TEXT, Address_AddressText TEXT, Address_PermitShowAddress TEXT, Emails TEXT, Websites TEXT, OrganizationType TEXT, Designation TEXT, HasEmail TEXT, PermitFreetextEmail TEXT, PermitShowListingLink TEXT, RelativeDetailsURL TEXT, PhotoLastupdate TEXT, Phones TEXT);
-                CREATE TABLE IF NOT EXISTS Individual(IndividualID INTEGER PRIMARY KEY, Name TEXT, Websites TEXT, Emails TEXT, Photo TEXT, Position TEXT, PermitFreetextEmail TEXT, FirstName TEXT, LastName TEXT, CorporationName TEXT, CorporationDisplayTypeId TEXT, PermitShowListingLink TEXT, RelativeDetailsURL TEXT, AgentPhotoLastUpdated TEXT, PhotoHighRes TEXT, RankMyAgentKey TEXT, RealSatisfiedKey TEXT, TestimonialTreeKey TEXT, CorporationType TEXT, CccMember TEXT, EducationCredentials TEXT, Organization TEXT, Phones TEXT);
-                CREATE TABLE IF NOT EXISTS Property_Photo(SequenceId TEXT NOT NULL, HighResPath TEXT NOT NULL, MedResPath TEXT NOT NULL, LowResPath TEXT NOT NULL, Description TEXT, LastUpdated TEXT NOT NULL, TypeId TEXT NOT NULL, PhotoGeneratedId INTEGER PRIMARY KEY NOT NULL, SvgPath TEXT);
-                CREATE TABLE IF NOT EXISTS Media(MediaCategoryId TEXT, MediaCategoryURL TEXT, Description TEXT, `Order` INTEGER, MediaGeneratedId INTEGER PRIMARY KEY, VideoType TEXT);
-                CREATE TABLE IF NOT EXISTS Tags(Label TEXT, HTMLColorCode TEXT, ListingTagTypeID TEXT, TagsGeneratedId INTEGER PRIMARY KEY);
-                CREATE TABLE IF NOT EXISTS OpenHouse(StartTime TEXT, StartDateTime TEXT, EndDateTime TEXT, FormattedDateTime TEXT, EventTypeID TEXT, OpenHouseGeneratedId INTEGER PRIMARY KEY);
-                CREATE TABLE IF NOT EXISTS Listings(Id TEXT PRIMARY KEY NOT NULL, MlsNumber TEXT NOT NULL, PublicRemarks TEXT NOT NULL, Building_StoriesTotal TEXT NOT NULL, Building_BathroomTotal TEXT, Building_Bedrooms TEXT, Building_Type TEXT, Building_UnitTotal TEXT, Building_SizeInterior TEXT, Building_SizeExterior TEXT, Property_Price TEXT NOT NULL, Property_Type TEXT NOT NULL, Property_Address_AddressText TEXT NOT NULL, Property_Address_Longitude TEXT NOT NULL, Property_Address_Latitude TEXT NOT NULL, Property_Address_PermitShowAddress TEXT NOT NULL, Property_TypeId TEXT NOT NULL, Property_FarmType TEXT, Property_ZoningType TEXT, Property_PriceUnformattedValue TEXT NOT NULL, Property_AmmenitiesNearBy TEXT, Property_Parking TEXT, Property_ParkingSpaceTotal TEXT, Property_ParkingType TEXT, Property_OwnershipType TEXT, Property_LeaseRent TEXT, Property_LeaseRentUnformattedValue TEXT, Land_SizeTotal TEXT, Land_SizeFrontage TEXT, AlternateURL_DetailsLink TEXT, AlternateURL_VideoLink TEXT, PostalCode TEXT NOT NULL, HistoricalDataIsCleared TEXT NOT NULL, ProvinceName TEXT NOT NULL, RelativeDetailsURL TEXT NOT NULL, StatusId TEXT NOT NULL, StandardStatusId TEXT, PhotoChangeDateUTC TEXT, Distance TEXT NOT NULL, RelativeURLEn TEXT NOT NULL, RelativeURLFr TEXT NOT NULL, InsertedDateUTC TEXT NOT NULL, TimeOnRealtor TEXT NOT NULL, UploadedBy INTEGER NOT NULL, PriceChangeDateUTC TEXT, OpenHouseInsertDateUTC TEXT, HasOpenHouseUpdate TEXT, ListingTimeZone TEXT, ListingBoundary TEXT, ListingGMT TEXT, HasNewImageUpdate TEXT, HasPriceUpdate TEXT, Individual TEXT, Property_Photo TEXT, Media TEXT, Tags TEXT, OpenHouse TEXT);
-                """
-                cursor.executescript(query)
+                # The reason we don't use the listsings above is because determining the SQL schema is destructive
+                # TODO: This should actually be it's own separate function for creating from raw DB
+                create_table_sql_statements = self.get_sqlite_sql_for_dbschema_from_raw_items()
+                # Create the tables one by one
+                for sql_statement in create_table_sql_statements:
+                    cursor.execute(sql_statement)
 
                 for listing in listings:
                     self.modify_dict(listing)
                     created_items = {}
+                    # WARNING: This is what flattens our dict item by default
                     self.split_lists_from_item(listing, items_to_create=created_items)
 
                     for item_path, items_to_create in created_items.items():
@@ -384,10 +429,11 @@ class JSONtoSQLAnalyzer:
                             cursor.execute(sql_str, item_values)
             connection.commit()
 
-    def print_schema_for_item(self, merged_item, default_table_key_name: str = "items"):
+    def get_sqlite_sql_for_merged_counter_dict(self, merged_item, default_table_key_name: str = "items"):
         num_items_in_db = self.get_items_count_from_db()
 
         results = {}
+        # WARNING: This is what flattens our dict item by default
         self.split_lists_from_item(merged_item, items_to_create=results)
         schemas = []
         created_paths = set()
@@ -455,7 +501,7 @@ class JSONtoSQLAnalyzer:
                 schemas.append(f"CREATE TABLE {table_name}({', '.join(columns)});")
                 created_paths.add(table_name)
 
-        print("\n".join(schemas))
+        return schemas
 
 
 config = {
@@ -473,7 +519,7 @@ config = {
 
 analyzer = JSONtoSQLAnalyzer("mls_raw_2024-01-31.db", config)
 
-analyzer.insert_into_new_database()
+analyzer.convert_raw_json_db_to_sqlite()
 
 # listings = analyzer.get_items_from_db(1)
 #

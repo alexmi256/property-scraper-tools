@@ -1,7 +1,9 @@
 """ Contains all queries to the Realtor.ca API and OpenStreetMap."""
 
-import requests
 import json
+
+import requests
+
 
 class RealtorAPI:
     def __init__(self, cookies_file: str = "cookies.json"):
@@ -30,9 +32,8 @@ class RealtorAPI:
             except json.decoder.JSONDecodeError:
                 f.seek(0)
                 cookies_string = f.readline()
-                cookies_dict = {k: v for k, v in [x.strip().split('=', 1) for x in cookies_string.split(';')]}
+                cookies_dict = {k: v for k, v in [x.strip().split("=", 1) for x in cookies_string.split(";")]}
                 return cookies_dict
-
 
     def get_coordinates(self, city):
         """Gets the coordinate bounds of a city from OpenStreetMap."""
