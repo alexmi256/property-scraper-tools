@@ -6,16 +6,16 @@ import xxhash
 from sortedcontainers import SortedDict
 from collections import Counter
 import functools
-from deepmerge import Merger, STRATEGY_END
+from deepmerge import Merger
 import collections
 import time
 import logging
 from utils import SQLITE_RESERVED_WORDS, PYTHON_TO_SQLITE_DATA_TYPES
+from deepmerge_strategies import merge_counters, merge_lists_with_dict_items
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 logger = logging.getLogger(__name__)
-
 
 
 # GENERATE_DICT_VALUE_VIA_XXHASH = lambda _, item_dict: xxhash.xxh32(str(SortedDict(item_dict))).intdigest()
@@ -23,43 +23,6 @@ logger = logging.getLogger(__name__)
 # GENERATE_KEYNAME_VIA_PARENT_NAME = lambda item_key, _: f"{item_key}GeneratedId"
 #
 # KEEP_ONLY_FIRST_LIST_ITEM = lambda item_list: next((x for x in item_list), {})
-
-
-
-
-def merge_counters(config, path, base, nxt):
-    """
-    use all values in either base or nxt.
-    """
-    if isinstance(base, Counter) and isinstance(nxt, Counter):
-        return base + nxt
-    else:
-        return STRATEGY_END
-
-
-def merge_lists_with_dict_items(config, path, base, nxt):
-    """
-    use all values in either base or nxt.
-    """
-    if isinstance(base, list) and isinstance(nxt, list):
-        custom_merger = Merger(
-            [
-                (Counter, merge_counters),
-                (list, merge_lists_with_dict_items),
-                (dict, ["merge"]),
-                (set, ["union"]),
-            ],
-            ["override"],
-            ["override"],
-        )
-
-        merged_items = {}
-        items = base + nxt
-
-        functools.reduce(lambda a, b: custom_merger.merge(a, b), items, merged_items)
-        return [merged_items]
-    else:
-        return STRATEGY_END
 
 
 class JSONtoSQLAnalyzer:
@@ -387,7 +350,7 @@ class JSONtoSQLAnalyzer:
         if new_db_name is None:
             new_db_name = f"mls_raw_{int(time.time())}.db"
 
-        with closing(sqlite3.connect(f"test_db.db")) as connection:
+        with closing(sqlite3.connect(f"{new_db_name}")) as connection:
             with closing(connection.cursor()) as cursor:
                 query = """
                 CREATE TABLE IF NOT EXISTS Phones(PhoneType TEXT, PhoneNumber TEXT, AreaCode TEXT, PhoneTypeId TEXT, PhonesGeneratedId INTEGER PRIMARY KEY, Extension TEXT);
@@ -510,7 +473,7 @@ config = {
 
 analyzer = JSONtoSQLAnalyzer("mls_raw_2024-01-31.db", config)
 
-# analyzer.generate_sqlite_sql_for_insertion()
+analyzer.insert_into_new_database()
 
 # listings = analyzer.get_items_from_db(1)
 #
