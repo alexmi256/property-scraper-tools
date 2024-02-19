@@ -1,5 +1,4 @@
 import collections
-import functools
 import json
 import logging
 import re
@@ -7,11 +6,14 @@ import sqlite3
 import time
 from collections import Counter
 from contextlib import closing
+from datetime import datetime
+from typing import Callable
 
 import xxhash
 from deepmerge import Merger
 from deepmerge_strategies import merge_counters, merge_lists_with_dict_items
 from sortedcontainers import SortedDict
+from tqdm import tqdm
 from utils import PYTHON_TO_SQLITE_DATA_TYPES, SQLITE_RESERVED_WORDS
 
 logging.basicConfig(level=logging.INFO)
@@ -19,20 +21,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# GENERATE_DICT_VALUE_VIA_XXHASH = lambda _, item_dict: xxhash.xxh32(str(SortedDict(item_dict))).intdigest()
-#
-# GENERATE_KEYNAME_VIA_PARENT_NAME = lambda item_key, _: f"{item_key}GeneratedId"
-#
-# KEEP_ONLY_FIRST_LIST_ITEM = lambda item_list: next((x for x in item_list), {})
-
-
 class JSONtoSQLAnalyzer:
-    def __init__(self, db_file: str, config: dict | None = None):
+    def __init__(self, db_file: str, item_mutator: Callable | None = None, auto_convert_simple_types: bool = False):
         self.created_tables = {}
         # self.items_to_create = {}
         # self.rows = rows
-        self.config = config or {}
+        self.item_mutator = item_mutator
         self.db_file = db_file
+        self.auto_convert_simple_types = auto_convert_simple_types
+        self.user_was_warned_about_mutators = False
 
     def get_items_from_db(self, limit: int = -1) -> list[dict]:
         """
@@ -79,6 +76,27 @@ class JSONtoSQLAnalyzer:
         return potential_ids
 
     @staticmethod
+    def cast_value_to_sqlite(value: str | bool | None) -> int | float | None:
+        # Empty strings which should be None
+        if type(value) is str and len(value) == 0:
+            return None
+        # Boolean types
+        elif type(value) is bool:
+            return int(value)
+        # JSON boolean strings
+        elif value.lower() in ["true", "false"]:
+            # Just SQLite things
+            return 1 if value.lower() == "true" else 0
+        # Simple numbers
+        elif re.match("-?\d+$", value):
+            return int(value)
+        # Simple floats
+        elif re.match(r"-?\d+\.\d+$", value):
+            return float(value)
+        else:
+            return value
+
+    @staticmethod
     def flatten(dictionary: dict, parent_key: bool = False, separator: str = "_") -> dict:
         """
         Turn a nested dictionary into a flattened dictionary
@@ -110,7 +128,10 @@ class JSONtoSQLAnalyzer:
         return dict(items)
 
     def modify_dict(
-        self, item: dict, item_path: list[str] | None = None, came_from_a_list: bool = False, config: dict = None
+        self,
+        item: dict,
+        item_path: list[str] | None = None,
+        came_from_a_list: bool = False,
     ) -> None:
         """
         This function modifies the dict in place with various functions that are currently hardcoded
@@ -118,9 +139,8 @@ class JSONtoSQLAnalyzer:
         The goal is to convert an unwieldy JSON text blob dict into something we can store into a relation SQL SB
         This usually requires that we do a bunch of changes to it
 
-        TODO: Remove the hardcoded functions here and somehoe use a config dict
+        TODO: Remove the hardcoded functions here and somehow use a config dict
 
-        :param config:
         :param item:
         :param item_path:
         :param came_from_a_list:
@@ -134,49 +154,13 @@ class JSONtoSQLAnalyzer:
 
         current_dict_path = f'{".".join(item_path)}'
 
-        # if 'Phones' in item:
-        #     logger.debug(f"Current path is: {current_dict_path}")
-
-        if current_dict_path == "$":
-            for key_name in ["Media", "Tags", "OpenHouse"]:
-                if key_name in item:
-                    for list_item in item[key_name]:
-                        list_item[f"{key_name}GeneratedId"] = xxhash.xxh32(str(SortedDict(list_item))).intdigest()
-
-        if current_dict_path == "$.Property":
-            for key_name in ["Photo"]:
-                if key_name in item:
-                    for list_item in item[key_name]:
-                        list_item[f"{key_name}GeneratedId"] = xxhash.xxh32(str(SortedDict(list_item))).intdigest()
-
-            for key_name in ["Parking"]:
-                if key_name in item:
-                    item[key_name] = ",".join([x["Name"] for x in item[key_name]])
-
-            for key_name in ["OwnershipTypeGroupIds"]:
-                if key_name in item:
-                    del item[key_name]
-
-        # This seems backwards but assumption is that multiple people belong to a single org so let's split it out
-        if current_dict_path == "$.Individual.[]":
-            for key_name in ["Organization"]:
-                item[key_name] = [item[key_name]]
-
-        if current_dict_path == "$.Individual.[].Organization.[]" or current_dict_path == "$.Individual.[]":
-            for key_name in ["Phones"]:
-                if key_name in item:
-                    for list_item in item[key_name]:
-                        list_item[f"{key_name}GeneratedId"] = int(
-                            re.sub(r"[^\d]", "", list_item.get("AreaCode", "") + list_item.get("PhoneNumber", ""))
-                        )
-
-            for key_name in ["Websites"]:
-                if key_name in item:
-                    item[key_name] = ",".join([x["Website"] for x in item[key_name]])
-
-            for key_name in ["Emails"]:
-                if key_name in item:
-                    item[key_name] = ",".join([x["ContactId"] for x in item[key_name]])
+        # WARN: This is where your custom function that modifies data will be used
+        if self.item_mutator:
+            logger.debug("Custom item mutator provided and will be used")
+            self.item_mutator(current_dict_path, item)
+        elif not self.user_was_warned_about_mutators:
+            logger.warning("Custom item mutator was not provided, pray that your data does not need modifications")
+            self.user_was_warned_about_mutators = True
 
         # Here we check what to do based on the key's value type
         for key, value in item.items():
@@ -189,7 +173,11 @@ class JSONtoSQLAnalyzer:
                 if all(isinstance(x, dict) for x in value):
                     # All the items in the list are dicts which makes life easy
                     for dict_in_list in value:
-                        self.modify_dict(dict_in_list, item_path + [key], True, config)
+                        self.modify_dict(
+                            dict_in_list,
+                            item_path=item_path + [key],
+                            came_from_a_list=True,
+                        )
                 else:
                     # This complicates life a lot and we hope it won't happen
                     logger.warning(
@@ -199,7 +187,9 @@ class JSONtoSQLAnalyzer:
             elif isinstance(value, dict):
                 logger.debug(f'{current_dict_path} Key "{key}" has a value of type dict')
                 # If it's a dict we need to go through this whole loop again
-                self.modify_dict(value, item_path + [key], False, config)
+                self.modify_dict(value, item_path=item_path + [key], came_from_a_list=False)
+            elif self.auto_convert_simple_types and (type(value) is str or type(value) is bool):
+                item[key] = JSONtoSQLAnalyzer.cast_value_to_sqlite(value)
 
     def modify_dict_to_counter_types(
         self,
@@ -324,13 +314,18 @@ class JSONtoSQLAnalyzer:
 
         return item.get(determined_item_id_key, "NO_ID_FOR_KEY")
 
-    def get_sqlite_sql_for_dbschema_from_raw_items(self) -> list[str]:
-        # The items are the raw JSON blobs converted to dicts
+    def convert_raw_db_to_json_and_merge_to_get_raw_schema(self):
+        """
+        This function process all raw JSON responses in your DB and merges them into one schema dict item
+        You can then use this item to generate or execute SQL commands
+        :return:
+        """
         items = self.get_items_from_db()
 
-        for item in items:
+        for item in tqdm(items, desc="Items Modified for SQL Schema Analysis", miniters=1):
             # Modify the item so that it will fit into a relational db better
             # i.e. Adding GeneratedIDs, making some list become dicts, etc...
+            # This is also where we can control whether we do simple value conversions
             self.modify_dict(item)
             # Modify the dict so that each value is a Counter with the data types
             self.modify_dict_to_counter_types(item)
@@ -349,47 +344,49 @@ class JSONtoSQLAnalyzer:
         merged_items = {}
 
         # Merge all the items into one which will now have Counter of data types so that we can see data consistency
-        functools.reduce(lambda a, b: custom_merger.merge(a, b), items, merged_items)
-        # logger.debug(dumps(merged_items, indent=2))
+        for item in tqdm(items, desc="Items Merged for SQL Schema Analysis"):
+            merged_items = custom_merger.merge(merged_items, item)
 
-        tables_to_create = self.get_sqlite_sql_for_merged_counter_dict(merged_items, default_table_key_name="Listings")
+        return merged_items
+
+    def get_sqlite_sql_for_dbschema_from_raw_items(
+        self, default_table_key_name="Listings",
+    ) -> list[str]:
+        merged_item = self.convert_raw_db_to_json_and_merge_to_get_raw_schema()
+
+        results = {}
+        # WARNING: This is what flattens our dict item by default
+        self.split_lists_from_item(merged_item, items_to_create=results)
+
+        tables_to_create = self.get_sqlite_sql_for_merged_counter_dict(
+            results, default_table_key_name=default_table_key_name,
+        )
+
         return tables_to_create
 
-    def generate_sqlite_sql_for_insertion(self, limit: int = 1) -> None:
-        """
-        Queries raw DB items, modifies them, and then prints out SQLite code for inserting said items into a relational DB based on previously determined schema
-        FIXME: Currently broken due to quotes
-        :param limit:
-        :return:
-        """
-        listings = self.get_items_from_db(limit)
-
-        for listing in listings:
-            self.modify_dict(listing)
-            self.print_sqlite_sql_for_insertion(listing, "Listings")
-
-    def print_sqlite_sql_for_insertion(self, merged_item, default_table_key_name: str = "items") -> None:
-        """
-        Prints out SQLite code for inserting given item into a relational DB based on previously determined schema
-        FIXME: This is broken because quotation is hard
-        :param merged_item:
-        :param default_table_key_name:
-        :return:
-        """
-        created_items = {}
-        # WARNING: This is what flattens our dict item by default
-        self.split_lists_from_item(merged_item, items_to_create=created_items)
-
-        for item_path, items_to_create in created_items.items():
+    def generate_sqlite_sql_for_inserting_split_item(self, insert_item_sql_statements: dict, default_table_key_name: str) -> list[tuple]:
+        statements = []
+        for item_path, items_to_create in insert_item_sql_statements.items():
             path_without_arrays = [x for x in item_path.split(".") if x != "[]"]
             table_name = default_table_key_name if item_path == "$" else path_without_arrays[-1]
 
             for dict_item in items_to_create:
                 item_keys = [f"`{x}`" if x in SQLITE_RESERVED_WORDS else x for x in dict_item.keys()]
                 item_values = [str(x) if isinstance(x, list) else x for x in dict_item.values()]
-                # FIXME: Quoting is completely broken atm
-                sql_str = f"INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {tuple(item_values)};"
-                print(sql_str)
+                item_values_template = str(tuple(["?"] * len(item_values))).replace("'", "")
+
+                statements.append(
+                    (f"INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {item_values_template};", item_values)
+                )
+        return statements
+
+    def create_sqlite_tables_from_statements(self, db_name:str, create_table_sql_statements: list[str]):
+        with closing(sqlite3.connect(db_name)) as connection:
+            with closing(connection.cursor()) as cursor:
+                # Create the tables one by one
+                for sql_statement in create_table_sql_statements:
+                    cursor.execute(sql_statement)
+            connection.commit()
 
     def convert_raw_json_db_to_sqlite(
         self, new_db_name: str | None = None, limit: int = -1, default_table_key_name: str = "Listings"
@@ -397,48 +394,34 @@ class JSONtoSQLAnalyzer:
         # These listings are the ones that will get inserted
         listings = self.get_items_from_db(limit)
         if new_db_name is None:
-            new_db_name = f"mls_raw_{int(time.time())}.db"
+            new_db_name = self.db_file.split(".")[0] + f"_parsed_full_{int(time.time())}.db"
 
-        with closing(sqlite3.connect(f"{new_db_name}")) as connection:
-            with closing(connection.cursor()) as cursor:
-                # The reason we don't use the listsings above is because determining the SQL schema is destructive
-                # TODO: This should actually be it's own separate function for creating from raw DB
-                create_table_sql_statements = self.get_sqlite_sql_for_dbschema_from_raw_items()
-                # Create the tables one by one
-                for sql_statement in create_table_sql_statements:
-                    cursor.execute(sql_statement)
+        create_table_sql_statements = self.get_sqlite_sql_for_dbschema_from_raw_items()
+        self.create_sqlite_tables_from_statements(new_db_name, create_table_sql_statements)
 
-                for listing in listings:
-                    self.modify_dict(listing)
-                    created_items = {}
-                    # WARNING: This is what flattens our dict item by default
-                    self.split_lists_from_item(listing, items_to_create=created_items)
+        with closing(sqlite3.connect(new_db_name)) as connection:
+            for listing in tqdm(listings, desc="Rows Processed"):
+                self.modify_dict(listing)
+                created_items = {}
+                # WARNING: This is what flattens our dict item by default
+                self.split_lists_from_item(listing, items_to_create=created_items)
 
-                    for item_path, items_to_create in created_items.items():
-                        path_without_arrays = [x for x in item_path.split(".") if x != "[]"]
-                        table_name = default_table_key_name if item_path == "$" else path_without_arrays[-1]
-
-                        for dict_item in items_to_create:
-                            item_keys = [f"`{x}`" if x in SQLITE_RESERVED_WORDS else x for x in dict_item.keys()]
-                            item_values = [str(x) if isinstance(x, list) else x for x in dict_item.values()]
-                            item_values_template = str(tuple(["?"] * len(item_values))).replace("'", "")
-
-                            sql_str = (
-                                f"INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {item_values_template};"
-                            )
-                            cursor.execute(sql_str, item_values)
+                statements = self.generate_sqlite_sql_for_inserting_split_item(created_items, default_table_key_name)
+                with closing(connection.cursor()) as cursor:
+                    for template, values in statements:
+                        cursor.execute(template, values)
             connection.commit()
 
-    def get_sqlite_sql_for_merged_counter_dict(self, merged_item, default_table_key_name: str = "items"):
+    def get_sqlite_sql_for_merged_counter_dict(
+        self, merged_item_results, default_table_key_name: str = "items",
+    ):
         num_items_in_db = self.get_items_count_from_db()
 
-        results = {}
-        # WARNING: This is what flattens our dict item by default
-        self.split_lists_from_item(merged_item, items_to_create=results)
         schemas = []
         created_paths = set()
+        multiple_datatype_errors = False
 
-        for item_path, items_to_create in results.items():
+        for item_path, items_to_create in merged_item_results.items():
             path_without_arrays = [x for x in item_path.split(".") if x != "[]"]
             table_name = default_table_key_name if item_path == "$" else path_without_arrays[-1]
 
@@ -456,10 +439,30 @@ class JSONtoSQLAnalyzer:
                 for column_name, column_type_counter in dict_item.items():
                     if column_type_counter is None:
                         logger.error(
-                            f"Column {column_name} has unknown data type and thus is messing up data and needs to be dealt with"
+                            f"Column  {item_path}.{column_name} has no data type and thus is messing up data and needs to be dealt with"
                         )
                         continue
-                    if type(column_type_counter) is list:
+                    could_be_non_null = True
+                    if type(column_type_counter) is Counter and "NoneType" in column_type_counter:
+                        del column_type_counter["NoneType"]
+                        could_be_non_null = False
+                        if len(column_type_counter) == 0:
+                            logger.error(
+                                f"Column {item_path}.{column_name} has no data in its counter after removing NoneType counters, assuming TEXT"
+                            )
+                            continue
+
+                    if len(column_type_counter) > 1:
+                        logger.error(
+                            f"Column {item_path}.{column_name}  has multiple data types: {column_type_counter}. This will cause errors upon data insertion. "
+                            f'You should add custom functions to the "modify_dict" function to make all the values the same.'
+                            f"Defaulting column to a TEXT data type as a workaround for now."
+                        )
+                        multiple_datatype_errors = True
+                        # Force TEXT type which should support all item types
+                        most_common_type_for_column = [("str", 0)]
+
+                    elif type(column_type_counter) is list:
                         # WARN: The commented code resulted in the "list" value type to be determined as type of the
                         #  most popular item in the "list". This doesn't make sense since the value is a list type and
                         #  not whatever type the list items are.
@@ -485,7 +488,11 @@ class JSONtoSQLAnalyzer:
                     sql_column_type = PYTHON_TO_SQLITE_DATA_TYPES.get(most_common_type_for_column[0][0], "TEXT")
 
                     # WARN: For large sample sizes this is ok but could be error prone by bad luck or small sample sizes
-                    should_be_not_null = "NOT NULL" if int(most_common_type_for_column[0][1]) == num_items_in_db else ""
+                    should_be_not_null = (
+                        "NOT NULL"
+                        if could_be_non_null and int(most_common_type_for_column[0][1]) == num_items_in_db
+                        else ""
+                    )
 
                     if column_name.upper() in SQLITE_RESERVED_WORDS:
                         column_name = f"`{column_name}`"
@@ -501,33 +508,10 @@ class JSONtoSQLAnalyzer:
                 schemas.append(f"CREATE TABLE {table_name}({', '.join(columns)});")
                 created_paths.add(table_name)
 
+        # if multiple_datatype_errors:
+        #     raise Exception('Multiple datatypes were detected for columns, insertion will fail, fix these and try again')
+
         return schemas
 
-
-config = {
-    "$": {
-        "Media": [],
-        "Tags": [],
-    },
-    "$.Property": {
-        "Photo": [],
-        "Parking": [],
-    },
-    "$.Individual.[].Organization.[]": {"Phones": [], "Websites": [], "Emails": []},
-    "$.Individual.[]": {"Phones": [], "Websites": [], "Emails": []},
-}
-
-analyzer = JSONtoSQLAnalyzer("mls_raw_2024-01-31.db", config)
-
-analyzer.convert_raw_json_db_to_sqlite()
-
-# listings = analyzer.get_items_from_db(1)
-#
-# for listing in listings:
-#     analyzer.modify_dict(listing)
-#     analyzer.print_sqlite_sql_for_insertion(listing, 'Listings')
-#     pass
-
-# merged_item = analyzer.merge_items_to_determine_db_schema()
-# pprint(merged_item)
-# analyzer.print_schema_for_item(merged_item, default_table_key_name='Listings')
+# analyzer = JSONtoSQLAnalyzer('mls_raw_2024-02-20.db')
+# analyzer.convert_raw_json_db_to_sqlite('new_test_db.db', limit=100)

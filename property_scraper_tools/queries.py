@@ -95,10 +95,14 @@ class RealtorAPI:
     def get_property_details(self, property_id, mls_reference_number):
         """Queries the Realtor.ca API to get details of a property."""
 
-        baseurl = "https://api2.realtor.ca/Listing.svc/PropertyDetails?ApplicationId=1&CultureId=1"
-        url = baseurl + "&PropertyID=" + property_id + "&ReferenceNumber=" + mls_reference_number
-
-        response = self.session.get(url=url, timeout=10)
+        url = f"https://api2.realtor.ca/Listing.svc/PropertyDetails"
+        params = {
+            "ApplicationId": 1,
+            "CultureId": 1,
+            "PropertyID": property_id,
+            "ReferenceNumber": mls_reference_number,
+        }
+        response = self.session.get(url=url, params=params, timeout=10)
         if response.status_code == 403:
             print("Error 403: Rate limited")
         elif response.status_code != 200:

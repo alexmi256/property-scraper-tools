@@ -26,18 +26,10 @@ where `id` is the MLS id and `details` is the raw JSON response for each listing
 ## JSONtoSQLAnalyzer
 This uses a database created above. The main code flow occurs in `convert_raw_json_db_to_sqlite`
 ```txt
-convert_raw_json_db_to_sqlite
-  get_items_from_db
-  get_sqlite_sql_for_dbschema_from_raw_items
-    get_items_from_db
-    modify_dict
-    modify_dict_to_counter_types
-    get_sqlite_sql_for_merged_counter_dict
-      get_items_count_from_db
-      split_lists_from_item
-  modify_dict
-  split_lists_from_item
+WIP
 ```
+
+You will almost certainly need to write and use "data mutators" in order modify each row in such a way that it can be stored.
 
 ### Why
 The response data returned by some servers is a giant JSON blob.
@@ -72,6 +64,7 @@ Even though I've targeted SQLite as the DB of choice for portability/accessibili
 - Long queries since you need to destructure data every time you access it
 - If you have poorly structured JSON where every value is formatted as a string, you'll have even longer queries and embedded logic for how to handle specific data
 - Largest storage size (95M)
+
 ##### Raw JSON storage as JSONB in SQlite
 **Pros**
 - Reduces storage space by x (95M -> XXM)
@@ -79,6 +72,7 @@ Even though I've targeted SQLite as the DB of choice for portability/accessibili
 **Cons**
 - Requires SQLite +3.45.0 which probably won't be supported on most systems as of yet
 - Doesn't actually help with JSON queries
+
 ##### JSONtoSQLAnalyzer in SQlite
 **Pros**
 - Reduces storage space by 2.7x (95M -> 35M)
@@ -89,13 +83,17 @@ Even though I've targeted SQLite as the DB of choice for portability/accessibili
 **Cons**
 - Still need to understand schema
 - You'll need to write custom code to clean up the response data so that the data can be stored
+
 ##### JSONtoSQLAnalyzer with automatic datatype guessing in SQlite
 **Pros**
-- It's free to do
+- It's free to do check
 - Automatically tries to guess data types for column values
+- Fallback to TEXT when we created inconsistent data by trying to auto cast
 
 **Cons**
 - Not perfect, logic for some data types will still live in queries/code
+- No real improvement in storage size ¯\_(ツ)_/¯
+- Increased risk of having multiple data types, these will fallback to TEXT but it means more manual fixes
 
 **Neutral**
 - Further separates raw response data from stored response data
@@ -290,14 +288,14 @@ INSERT OR IGNORE INTO Listings ('Id', 'MlsNumber', 'PublicRemarks', 'Building_St
 ```
 
 # TODO
-- [ ] Separate hardcoded functions in JSONtoSQL to a config file
-- [ ] Automatic attempts for type conversion for each key value
-- [x] Compare raw JSON text to split tables of JSON
 - [ ] Split off `JSONtoSQLAnalyzer` to its own repo
+- [ ] Make RealtorJSONtoSQLAnalyzer example work
+- [ ] Fallback to TEXT when handling unsupported items such as lists or dicts
+- [ ] Examples
 - [ ] Compare split tables of JSON with new SQLite JSONB extension
-- [x] Use logging instead of printing
 - [ ] Figure out multi-day data storage
 
 # Thanks
 * https://github.com/harry-s-grewal/mls-real-estate-scraper-for-realtor.ca
 * https://stackoverflow.com/questions/6027558/flatten-nested-dictionaries-compressing-keys
+* https://stackoverflow.com/questions/1832714/18-digit-timestamp/1832746#1832746

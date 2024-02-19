@@ -4,12 +4,13 @@ import sqlite3
 from contextlib import closing
 from datetime import date
 from math import ceil
-from pprint import pformat
+from pprint import pformat, pprint
 from random import randint
 from time import sleep
 
 from queries import RealtorAPI
-from requests import HTTPError
+from requests import HTTPError, ConnectionError
+from urllib3.exceptions import ProtocolError
 from tqdm import tqdm
 
 logging.basicConfig(level=logging.DEBUG)
@@ -144,7 +145,8 @@ class RealtorRawScraper:
                     self.write_response_results_to_db(response, current_date)
 
                     success = True
-                except HTTPError:
+                # Too many damn errors to handle
+                except Exception:
                     logger.error(f"Attempt #{attempts}: Error occurred on city: {city}")
                     attempts += 1
                     if attempts > 4:
@@ -155,7 +157,10 @@ class RealtorRawScraper:
         logger.info(f"Completed while parsing {total_pages} pages and {len(self.parsed_mls_numbers)} listings")
         self.api.save_cookies()
 
+    def parse_listing_details(self, property_id, mls_reference_number):
+        response = self.api.get_property_details(property_id, mls_reference_number)
+        pprint(response)
 
 scraper = RealtorRawScraper()
-# TODO: We might have to parse listings ascending and then descending in order to capture all items
 scraper.parse_listings()
+# scraper.parse_listing_details(26418653, 13680165)
