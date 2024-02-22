@@ -290,6 +290,7 @@ INSERT OR IGNORE INTO Listings ('Id', 'MlsNumber', 'PublicRemarks', 'Building_St
 # TODO
 - [ ] Split off `JSONtoSQLAnalyzer` to its own repo
 - [ ] Make RealtorJSONtoSQLAnalyzer example work
+- [ ] More examples about usage and ideally code that explains what you should do
 - [ ] Fallback to TEXT when handling unsupported items such as lists or dicts
 - [ ] Examples
 - [ ] Compare split tables of JSON with new SQLite JSONB extension

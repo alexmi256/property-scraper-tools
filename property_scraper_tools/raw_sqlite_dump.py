@@ -9,9 +9,9 @@ from random import randint
 from time import sleep
 
 from queries import RealtorAPI
-from requests import HTTPError, ConnectionError
-from urllib3.exceptions import ProtocolError
+from requests import ConnectionError, HTTPError
 from tqdm import tqdm
+from urllib3.exceptions import ProtocolError
 
 logging.basicConfig(level=logging.DEBUG)
 

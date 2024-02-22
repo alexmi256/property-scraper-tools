@@ -6,13 +6,10 @@ import sqlite3
 import time
 from collections import Counter
 from contextlib import closing
-from datetime import datetime
 from typing import Callable
 
-import xxhash
 from deepmerge import Merger
 from deepmerge_strategies import merge_counters, merge_lists_with_dict_items
-from sortedcontainers import SortedDict
 from tqdm import tqdm
 from utils import PYTHON_TO_SQLITE_DATA_TYPES, SQLITE_RESERVED_WORDS
 
@@ -31,14 +28,16 @@ class JSONtoSQLAnalyzer:
         self.auto_convert_simple_types = auto_convert_simple_types
         self.user_was_warned_about_mutators = False
 
-    def get_items_from_db(self, limit: int = -1) -> list[dict]:
+    def get_items_from_db(self, db_file: str | None = None, limit: int = -1) -> list[dict]:
         """
         Open a previously saved raw DB and return the top X rows
 
+        :param db_file: Which DB file to query, if None is specified the one from the class will be used
         :param limit: Amount of rows to fetch
         :return:
         """
-        with closing(sqlite3.connect(self.db_file)) as connection:
+        db_to_open = db_file if db_file else self.db_file
+        with closing(sqlite3.connect(db_to_open)) as connection:
             with closing(connection.cursor()) as cursor:
                 rows = cursor.execute(f"SELECT details from listings LIMIT {limit}").fetchall()
                 return [json.loads(x[0]) for x in rows]
@@ -77,6 +76,11 @@ class JSONtoSQLAnalyzer:
 
     @staticmethod
     def cast_value_to_sqlite(value: str | bool | None) -> int | float | None:
+        """
+        Casts a string data type to one that's likely to have better native support i.e. int, float
+        :param value:
+        :return:
+        """
         # Empty strings which should be None
         if type(value) is str and len(value) == 0:
             return None
@@ -350,8 +354,15 @@ class JSONtoSQLAnalyzer:
         return merged_items
 
     def get_sqlite_sql_for_dbschema_from_raw_items(
-        self, default_table_key_name="Listings",
+        self,
+        default_table_key_name="Listings",
     ) -> list[str]:
+        """
+        Returns SQL statements to create the necessary tables determined by looking at all DB items and merging them
+
+        :param default_table_key_name:
+        :return:
+        """
         merged_item = self.convert_raw_db_to_json_and_merge_to_get_raw_schema()
 
         results = {}
@@ -359,12 +370,15 @@ class JSONtoSQLAnalyzer:
         self.split_lists_from_item(merged_item, items_to_create=results)
 
         tables_to_create = self.get_sqlite_sql_for_merged_counter_dict(
-            results, default_table_key_name=default_table_key_name,
+            results,
+            default_table_key_name=default_table_key_name,
         )
 
         return tables_to_create
 
-    def generate_sqlite_sql_for_inserting_split_item(self, insert_item_sql_statements: dict, default_table_key_name: str) -> list[tuple]:
+    def generate_sqlite_sql_for_inserting_split_item(
+        self, insert_item_sql_statements: dict, default_table_key_name: str
+    ) -> list[tuple]:
         statements = []
         for item_path, items_to_create in insert_item_sql_statements.items():
             path_without_arrays = [x for x in item_path.split(".") if x != "[]"]
@@ -376,11 +390,14 @@ class JSONtoSQLAnalyzer:
                 item_values_template = str(tuple(["?"] * len(item_values))).replace("'", "")
 
                 statements.append(
-                    (f"INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {item_values_template};", item_values)
+                    (
+                        f"INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {item_values_template};",
+                        item_values,
+                    )
                 )
         return statements
 
-    def create_sqlite_tables_from_statements(self, db_name:str, create_table_sql_statements: list[str]):
+    def create_sqlite_tables_from_statements(self, db_name: str, create_table_sql_statements: list[str]):
         with closing(sqlite3.connect(db_name)) as connection:
             with closing(connection.cursor()) as cursor:
                 # Create the tables one by one
@@ -392,13 +409,15 @@ class JSONtoSQLAnalyzer:
         self, new_db_name: str | None = None, limit: int = -1, default_table_key_name: str = "Listings"
     ):
         # These listings are the ones that will get inserted
-        listings = self.get_items_from_db(limit)
+        listings = self.get_items_from_db(limit=limit)
         if new_db_name is None:
             new_db_name = self.db_file.split(".")[0] + f"_parsed_full_{int(time.time())}.db"
 
+        # Create the table
         create_table_sql_statements = self.get_sqlite_sql_for_dbschema_from_raw_items()
         self.create_sqlite_tables_from_statements(new_db_name, create_table_sql_statements)
 
+        # Insert the listings into the table
         with closing(sqlite3.connect(new_db_name)) as connection:
             for listing in tqdm(listings, desc="Rows Processed"):
                 self.modify_dict(listing)
@@ -413,8 +432,17 @@ class JSONtoSQLAnalyzer:
             connection.commit()
 
     def get_sqlite_sql_for_merged_counter_dict(
-        self, merged_item_results, default_table_key_name: str = "items",
-    ):
+        self,
+        merged_item_results,
+        default_table_key_name: str = "items",
+    ) -> list[str]:
+        """
+        This will return you a list of SQL statements used for creating the necessary table given your derived schema
+
+        :param merged_item_results:
+        :param default_table_key_name: The name of the default table your "items" will be placed in
+        :return:
+        """
         num_items_in_db = self.get_items_count_from_db()
 
         schemas = []
@@ -505,13 +533,14 @@ class JSONtoSQLAnalyzer:
 
                     columns.append(creation_text.strip())
 
-                schemas.append(f"CREATE TABLE {table_name}({', '.join(columns)});")
+                schemas.append(f"CREATE TABLE IF NOT EXISTS {table_name}({', '.join(columns)});")
                 created_paths.add(table_name)
 
         # if multiple_datatype_errors:
         #     raise Exception('Multiple datatypes were detected for columns, insertion will fail, fix these and try again')
 
         return schemas
+
 
 # analyzer = JSONtoSQLAnalyzer('mls_raw_2024-02-20.db')
 # analyzer.convert_raw_json_db_to_sqlite('new_test_db.db', limit=100)
