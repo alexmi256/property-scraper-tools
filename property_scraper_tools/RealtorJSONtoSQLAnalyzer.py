@@ -1,9 +1,12 @@
+import argparse
 import logging
 import re
 import sqlite3
 from collections import Counter
 from contextlib import closing
 from datetime import datetime
+from pathlib import Path
+from pprint import pprint
 
 import xxhash
 from JSONtoSQLAnalyzer import JSONtoSQLAnalyzer
@@ -85,7 +88,11 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 if key_name in item:
                     for list_item in item[key_name]:
                         list_item[f"{key_name}GeneratedId"] = int(
-                            re.sub(r"[^\d]", "", list_item.get("AreaCode", "") + list_item.get("PhoneNumber", ""))
+                            re.sub(
+                                r"[^\d]",
+                                "",
+                                list_item.get("AreaCode", "") + list_item.get("PhoneNumber", ""),
+                            )
                         )
             # Same for websites
             for key_name in ["Websites"]:
@@ -140,7 +147,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
          One that is done we can merge it into the main class.
         TODO: Support config for adding columns
 
-        :param default_table_key_name:
+        :param default_table_key_name: This is the new table name that will be created for main items to store
         :param columns_to_keep: Only the columns in this list will created and have data inserted into them
         :param add_computed_columns: Add the following columns to the DB table schema
         :param keep_only_main_item:
@@ -181,7 +188,10 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
         return tables_to_create
 
     def generate_sqlite_sql_for_inserting_split_item(
-        self, insert_item_sql_statements: dict, default_table_key_name: str, limit_to_columns: list[str] | None = None
+        self,
+        insert_item_sql_statements: dict,
+        default_table_key_name: str,
+        limit_to_columns: list[str] | None = None,
     ) -> list[tuple]:
         """
         Insert the items found in the listing but discard all but the main table and keep only specific columns
@@ -207,14 +217,22 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 items_as_question_marks = ", ".join(["?"] * len(available_values))
 
                 template = (
-                    f"INSERT OR REPLACE INTO {table_name} {tuple(available_keys)} VALUES ({items_as_question_marks})"
+                    f"INSERT OR IGNORE INTO {table_name} {tuple(available_keys)} VALUES ({items_as_question_marks})"
                 )
 
                 statements.append((template, available_values))
 
         return statements
 
-    def merge_multiple_raw_dbs_into_single_minimal_db(self, new_db_name: str, raw_dbs: list[str]):
+    def merge_multiple_raw_dbs_into_single_minimal_db(
+        self,
+        new_db_name: str,
+        raw_dbs: list[str],
+        create_new_tables: bool = True,
+        db_date: str | None = None,
+        add_computed_columns: bool = True,
+        minimal_config: bool = False,
+    ) -> None:
         columns_to_keep = [
             "AlternateURL_DetailsLink",
             "AlternateURL_VideoLink",
@@ -247,35 +265,48 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
             "RelativeDetailsURL",
         ]
 
-        create_table_sql_statements = self.get_sqlite_sql_for_dbschema_from_raw_items(
-            columns_to_keep=columns_to_keep,
-            default_table_key_name="Listings",
-            keep_only_main_item=True,
-            add_computed_columns=True,
-        )
-        self.create_sqlite_tables_from_statements(new_db_name, create_table_sql_statements)
+        if create_new_tables:
+            create_table_sql_statements = self.get_sqlite_sql_for_dbschema_from_raw_items(
+                columns_to_keep=columns_to_keep if minimal_config else None,
+                default_table_key_name="Listings",
+                keep_only_main_item=minimal_config,
+                # Only applicable for this custom class
+                add_computed_columns=add_computed_columns,
+            )
+            self.create_sqlite_tables_from_statements(new_db_name, create_table_sql_statements)
 
-        price_history_table_sql = """
-                CREATE TABLE IF NOT EXISTS PriceHistory (
-                    MlsNumber INTEGER,
-                    Price     INTEGER NOT NULL,
-                    Date      TEXT    NOT NULL,
-                    FOREIGN KEY (
-                        MlsNumber
-                    )
-                    REFERENCES Listings (MlsNumber),
-                    UNIQUE (
-                        MlsNumber,
-                        Price,
-                        Date
-                    )
-                );
-            """
-        self.create_sqlite_tables_from_statements(new_db_name, [price_history_table_sql])
+            price_history_table_sql = """
+                    CREATE TABLE IF NOT EXISTS PriceHistory (
+                        MlsNumber INTEGER,
+                        Price     INTEGER NOT NULL,
+                        Date      TEXT    NOT NULL,
+                        FOREIGN KEY (
+                            MlsNumber
+                        )
+                        REFERENCES Listings (MlsNumber),
+                        UNIQUE (
+                            MlsNumber,
+                            Price,
+                            Date
+                        )
+                    );
+                """
+            self.create_sqlite_tables_from_statements(new_db_name, [price_history_table_sql])
 
         with closing(sqlite3.connect(new_db_name)) as connection:
             for old_db_name in raw_dbs:
-                db_date = old_db_name.split("_")[-1][:-3]
+                # WARN: This is hacky and no guarantee on actual dates
+                # If were merging multiple tables then we can't really rely on user input
+
+                # We have a DB date from the file which we should prefer in the case of multiple DBs
+                date_in_old_file_name = re.search(r"\d{4}-\d{2}-\d{2}", str(old_db_name))
+                if date_in_old_file_name and (len(raw_dbs) > 1 or db_date is None):
+                    db_date = date_in_old_file_name.group().split("_")[-1][:-3]
+                elif db_date:
+                    pass
+                else:
+                    raise Exception("Could not figure out date for DB to converet which will cause issues")
+
                 listings = self.get_items_from_db(db_file=old_db_name)
 
                 for listing in tqdm(listings, desc=f"Rows Processed for {old_db_name}"):
@@ -290,46 +321,57 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                     listing_is_new_build = "GST +  QST" in listing.get("Property", {}).get("Price", "")
                     if listing_is_new_build:
                         computed_columns["ComputedNewBuild"] = True
+                        # If it's a new build it will have 15% taxes which we want to auto add cuz that's just a hidden fee
                         if listing.get("Property", {}).get("PriceUnformattedValue"):
-                            listing["Property"]["PriceUnformattedValue"] = round(listing["Property"]["PriceUnformattedValue"] * 1.14975)
-
-                    listing.update(computed_columns)
+                            listing["Property"]["PriceUnformattedValue"] = round(
+                                listing["Property"]["PriceUnformattedValue"] * 1.14975
+                            )
 
                     listing_interior_size = listing.get("Building", {}).get("SizeInterior")
                     if listing_interior_size:
-                        listing["ComputedSQFT"] = round(
+                        computed_columns["ComputedSQFT"] = round(
                             RealtorJSONtoSQLAnalyzer.convert_interior_size_to_sqft(listing_interior_size)
                         )
                         listing_price = listing.get("Property", {}).get("PriceUnformattedValue")
                         if listing_price:
-                            listing["ComputedPricePerSQFT"] = round(float(listing_price) / listing["ComputedSQFT"])
+                            computed_columns["ComputedPricePerSQFT"] = round(
+                                float(listing_price) / computed_columns["ComputedSQFT"]
+                            )
+
+                    if add_computed_columns:
+                        listing.update(computed_columns)
 
                     results = {}
                     # WARNING: This is what flattens our dict item by default
                     self.split_lists_from_item(listing, items_to_create=results)
 
                     # Remove all data but the main Listings/$ object
-                    for keyname in list(results.keys()):
-                        if keyname != "$":
-                            del results[keyname]
+                    if minimal_config:
+                        for keyname in list(results.keys()):
+                            if keyname != "$":
+                                del results[keyname]
 
                     # TODO: Make function below support config for keeping only columns and keys
                     # NOTE: With current setup there will only ever be one statement since we're only inserting the main item
                     statements = self.generate_sqlite_sql_for_inserting_split_item(
                         results,
+                        # FIXME: This needs to be baked into argparse
                         default_table_key_name="Listings",
-                        limit_to_columns=columns_to_keep + list(computed_columns.keys()),
+                        limit_to_columns=(columns_to_keep + list(computed_columns.keys()) if minimal_config else None),
                     )
                     with closing(connection.cursor()) as cursor:
+                        # Insert the items
                         for statement in statements:
                             cursor.execute(statement[0], statement[1])
+                        # And also insert the price history item
                         price_history_values = [
                             listing["MlsNumber"],
                             listing["Property"]["PriceUnformattedValue"],
                             db_date,
                         ]
                         cursor.execute(
-                            "REPLACE INTO PriceHistory (MlsNumber, Price, Date) VALUES (?, ?, ?);", price_history_values
+                            "REPLACE INTO PriceHistory (MlsNumber, Price, Date) VALUES (?, ?, ?);",
+                            price_history_values,
                         )
 
             connection.commit()
@@ -337,21 +379,172 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
 
 config = {}
 
-analyzer = RealtorJSONtoSQLAnalyzer(
-    "mls_raw_2024-02-20.db", item_mutator=RealtorJSONtoSQLAnalyzer.data_mutator, auto_convert_simple_types=True
-)
+# analyzer = RealtorJSONtoSQLAnalyzer(
+#     "mls_raw_2024-02-22.db", item_mutator=RealtorJSONtoSQLAnalyzer.data_mutator, auto_convert_simple_types=True
+# )
 
 # analyzer.convert_raw_json_db_to_sqlite()
 
-analyzer.merge_multiple_raw_dbs_into_single_minimal_db(
-    "mls_complete_minimal.db",
-    [
-        "mls_raw_2023-11-19.db",
-        "mls_raw_2024-01-30.db",
-        "mls_raw_2024-01-31.db",
-        "mls_raw_2024-02-13.db",
-        "mls_raw_2024-02-18.db",
-        "mls_raw_2024-02-20.db",
-        "mls_raw_2024-02-21.db",
-    ],
-)
+# analyzer.merge_multiple_raw_dbs_into_single_minimal_db(
+#     "mls_complete_minimal.db",
+#     [
+#         "mls_raw_2023-11-19.db",
+#         "mls_raw_2024-01-30.db",
+#         "mls_raw_2024-01-31.db",
+#         "mls_raw_2024-02-13.db",
+#         "mls_raw_2024-02-18.db",
+#         "mls_raw_2024-02-20.db",
+#         "mls_raw_2024-02-21.db",
+#         "mls_raw_2024-02-22.db",
+#     ],
+# )
+
+# analyzer.update_minimal_db_with_raw_db_results("mls_complete_minimal.db", "mls_raw_2024-02-22.db")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        prog="Realtor.ca Database Analyzer and Updater",
+        description="""
+        Analyzes databases storing raw JSON responses from realtor.ca and converts them into a database relational format.
+
+        Extra functionality includes creating and updating minimal copies of such databases
+        """,
+    )
+
+    parser.add_argument(
+        "database",
+        nargs="+",
+        type=Path,
+        help="""The raw database file to perform analysis on. It must have a table named "Listings" and column "details".
+             Multiple tables can be provided for extra actions but analysis will only be perform on the first one""",
+    )
+
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "-a",
+        "--analyze",
+        action="store_true",
+        help="""Perform the analysis on the database which will print out a dict object with counters of all the merged items.
+        """,
+    )
+    group.add_argument(
+        "-c",
+        "--convert",
+        action="store_true",
+        help="""Silently analyze the raw JSON database and then convert it database to a SQL schemafull database
+        """,
+    )
+
+    # These flags only affect analysis
+    parser.add_argument(
+        "--print-sql",
+        action="store_true",
+        help="""Analyzes the database and prints the SQL statements for creating the tables
+        Note that further modifications will be performed on your data beyond your supplied "data_mutator" such as dict flattening.
+        """,
+    )
+
+    # TODO: Option to print minimal dict
+    # TODO: Option to print the flattened version
+    # TODO: Option to decided to flatten or not (default is flatten)
+
+    # These flags only affect conversion
+
+    # The flags below impact both analysis and conversion
+    # FIXME: Make these work
+    # parser.add_argument(
+    #     "--table-name",
+    #     type=str,
+    #     default="listings",
+    #     help="The name of the SQLite table that contains the raw JSON data",
+    # )
+    #
+    # parser.add_argument(
+    #     "--column-name",
+    #     type=str,
+    #     default="details",
+    #     help="The name of the column containing JSON blobs",
+    # )
+
+    parser.add_argument(
+        "--new-table-name",
+        type=str,
+        default="Listings",
+        help="""The name of the SQLite table that will be used to store the newly converted object items.
+        Since we receive just a list of items we can't properly guess the name of what the list of items should be.
+        """,
+    )
+
+    parser.add_argument(
+        "--analyze-auto-covert-types",
+        default=True,
+        type=bool,
+        help="""When analyzing the database for printing or converting, we will try to convert string value types to simple data types.
+        The simple data types are string, bool, int, float which have semi-equivalent SQLite data types.
+        The caveat of running with this option however is that depending on the raw data we can end up with multiple data type conversions.
+        When this happens we fall back to string/TEXT data type.
+        The fix for this is write custom logic the your "data_mutator" to handle these conflicting conversions before we try to auto-convert.
+        """,
+    )
+
+    # These options only really apply when converting databases
+
+    parser.add_argument(
+        "-o",
+        "--output-database",
+        type=Path,
+        help="The name of the db that the analyzed results will be output to",
+        default="output.sqlite",
+    )
+
+    parser.add_argument(
+        "--db-date",
+        type=str,
+        help="The date of the given database. This affects some of the generated data we store for items.",
+    )
+    parser.add_argument(
+        "-m",
+        "--minimal",
+        action="store_true",
+        help="If the output database format should be minimal instead of full",
+    )
+
+    parser.add_argument(
+        "-u",
+        "--update-output-db",
+        type=bool,
+        default=False,
+        help="Assume databases were already created and we just want to update the output",
+    )
+
+    args = parser.parse_args()
+
+    analyzer = RealtorJSONtoSQLAnalyzer(
+        args.database[0],
+        item_mutator=RealtorJSONtoSQLAnalyzer.data_mutator,
+        auto_convert_simple_types=args.analyze_auto_covert_types,
+    )
+
+    if args.analyze:
+        merged_items = analyzer.convert_raw_db_to_json_and_merge_to_get_raw_schema()
+        pprint(merged_items)
+        if args.print_sql:
+            results = {}
+            # WARNING: This is what flattens our dict item by default
+            analyzer.split_lists_from_item(merged_items, items_to_create=results)
+
+            tables_to_create = analyzer.get_sqlite_sql_for_merged_counter_dict(
+                results,
+                default_table_key_name=args.new_table_name,
+            )
+            for table in tables_to_create:
+                print(table)
+    elif args.convert:
+        analyzer.merge_multiple_raw_dbs_into_single_minimal_db(
+            new_db_name=args.output_database,
+            raw_dbs=args.database,
+            create_new_tables=not args.update_output_db,
+            db_date=args.db_date,
+            minimal_config=args.minimal,
+        )

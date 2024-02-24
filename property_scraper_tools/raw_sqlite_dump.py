@@ -4,14 +4,13 @@ import sqlite3
 from contextlib import closing
 from datetime import date
 from math import ceil
-from pprint import pformat, pprint
+from pprint import pprint
 from random import randint
 from time import sleep
 
 from queries import RealtorAPI
-from requests import ConnectionError, HTTPError
+from requests import HTTPError
 from tqdm import tqdm
-from urllib3.exceptions import ProtocolError
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -78,7 +77,8 @@ class RealtorRawScraper:
             logger.error(f"Response data had 0 listings")
         with closing(self.connection.cursor()) as cursor:
             cursor.executemany(
-                "INSERT OR IGNORE INTO listings (id, details, last_updated) VALUES(?, ?, ?)", response_data
+                "INSERT OR IGNORE INTO listings (id, details, last_updated) VALUES(?, ?, ?)",
+                response_data,
             )
             self.connection.commit()
             self.total_parsed += len(response_data)
@@ -160,6 +160,7 @@ class RealtorRawScraper:
     def parse_listing_details(self, property_id, mls_reference_number):
         response = self.api.get_property_details(property_id, mls_reference_number)
         pprint(response)
+
 
 scraper = RealtorRawScraper()
 scraper.parse_listings()

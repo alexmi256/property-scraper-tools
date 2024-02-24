@@ -4,6 +4,7 @@ import logging
 import re
 import sqlite3
 import time
+from pathlib import Path
 from collections import Counter
 from contextlib import closing
 from typing import Callable
@@ -19,7 +20,12 @@ logger = logging.getLogger(__name__)
 
 
 class JSONtoSQLAnalyzer:
-    def __init__(self, db_file: str, item_mutator: Callable | None = None, auto_convert_simple_types: bool = False):
+    def __init__(
+        self,
+        db_file: str,
+        item_mutator: Callable | None = None,
+        auto_convert_simple_types: bool = False,
+    ):
         self.created_tables = {}
         # self.items_to_create = {}
         # self.rows = rows
@@ -37,6 +43,8 @@ class JSONtoSQLAnalyzer:
         :return:
         """
         db_to_open = db_file if db_file else self.db_file
+        if not db_to_open or not Path(db_to_open).exists():
+            raise Exception(f"Database {db_file} does not exist!")
         with closing(sqlite3.connect(db_to_open)) as connection:
             with closing(connection.cursor()) as cursor:
                 rows = cursor.execute(f"SELECT details from listings LIMIT {limit}").fetchall()
@@ -243,7 +251,11 @@ class JSONtoSQLAnalyzer:
                 item[key] = Counter([type(value).__name__])
 
     def split_lists_from_item(
-        self, item: dict, item_path: list[str] | None = None, flatten=True, items_to_create: dict | None = None
+        self,
+        item: dict,
+        item_path: list[str] | None = None,
+        flatten=True,
+        items_to_create: dict | None = None,
     ) -> int | str:
         """
         Splits up the given item into the given items_to_create dict so that each key will have a list of items to create
@@ -284,9 +296,21 @@ class JSONtoSQLAnalyzer:
             object_value = item.pop(key_name)
             if type(object_value) is list:
                 for list_item in object_value:
-                    dicts_to_create.append({"key_name": key_name, "came_from_a_list": True, "key_value": list_item})
+                    dicts_to_create.append(
+                        {
+                            "key_name": key_name,
+                            "came_from_a_list": True,
+                            "key_value": list_item,
+                        }
+                    )
             elif type(object_value) is dict:
-                dicts_to_create.append({"key_name": key_name, "came_from_a_list": False, "key_value": object_value})
+                dicts_to_create.append(
+                    {
+                        "key_name": key_name,
+                        "came_from_a_list": False,
+                        "key_value": object_value,
+                    }
+                )
             else:
                 raise Exception(
                     f"Item dict had a removable value type that was neither a list nor a dict: {type(object_value)}"
@@ -297,7 +321,10 @@ class JSONtoSQLAnalyzer:
             if dict_item["came_from_a_list"]:
                 new_item_path.append("[]")
             discovered_item_id = self.split_lists_from_item(
-                dict_item["key_value"], item_path=new_item_path, flatten=flatten, items_to_create=items_to_create
+                dict_item["key_value"],
+                item_path=new_item_path,
+                flatten=flatten,
+                items_to_create=items_to_create,
             )
 
             if dict_item["key_name"] not in item:
@@ -406,7 +433,10 @@ class JSONtoSQLAnalyzer:
             connection.commit()
 
     def convert_raw_json_db_to_sqlite(
-        self, new_db_name: str | None = None, limit: int = -1, default_table_key_name: str = "Listings"
+        self,
+        new_db_name: str | None = None,
+        limit: int = -1,
+        default_table_key_name: str = "Listings",
     ):
         # These listings are the ones that will get inserted
         listings = self.get_items_from_db(limit=limit)
@@ -482,9 +512,9 @@ class JSONtoSQLAnalyzer:
 
                     if len(column_type_counter) > 1:
                         logger.error(
-                            f"Column {item_path}.{column_name}  has multiple data types: {column_type_counter}. This will cause errors upon data insertion. "
-                            f'You should add custom functions to the "modify_dict" function to make all the values the same.'
-                            f"Defaulting column to a TEXT data type as a workaround for now."
+                            f"""Column {item_path}.{column_name} has multiple data types: {column_type_counter}. This will cause errors upon data insertion.
+                            You should add custom functions to the "modify_dict" function to make all the values the same.
+                            Defaulting {item_path}.{column_name} to a TEXT data type as a workaround for now."""
                         )
                         multiple_datatype_errors = True
                         # Force TEXT type which should support all item types

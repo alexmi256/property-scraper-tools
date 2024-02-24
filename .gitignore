@@ -177,3 +177,4 @@ listings_to_audit.csv
 mls_blocklist.txt
 property_scraper_tools/display_properties.py
 stations.geojson
+output.sqlite

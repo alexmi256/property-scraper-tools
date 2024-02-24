@@ -153,5 +153,6 @@ PYTHON_TO_SQLITE_DATA_TYPES = {
     "str": "TEXT",
     "float": "REAL",
     "list": "TEXT",
+    "bool": "INTEGER",
     # 'list': 'JSONB',
 }

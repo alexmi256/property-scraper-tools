@@ -4,8 +4,3 @@ sortedcontainers
 deepmerge
 tqdm
 requests
-
-# For property viewer
-# shapely
-# folium
-# geopy
