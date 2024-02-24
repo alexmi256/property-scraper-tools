@@ -418,7 +418,7 @@ class JSONtoSQLAnalyzer:
 
                 statements.append(
                     (
-                        f"INSERT OR IGNORE INTO {table_name} {tuple(item_keys)} VALUES {item_values_template};",
+                        f"REPLACE INTO {table_name} {tuple(item_keys)} VALUES {item_values_template};",
                         item_values,
                     )
                 )

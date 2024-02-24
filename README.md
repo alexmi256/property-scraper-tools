@@ -8,7 +8,7 @@ Scrape realtor.ca listing data and ~~efficiently~~ store them in an SQLite datab
 # How
 ## raw_sqlite_dump.py
 
-### Cookies
+### Cookies  
 For best results you should use a real browser to navigate the site once and save the cookies given by the search query.
 Browsers will usually give you a string format of `cookie1=value1;cookie2=value2` for but this script supports converting this to JSON.
 
@@ -54,6 +54,8 @@ Even though I've targeted SQLite as the DB of choice for portability/accessibili
 - I have no idea how to efficiently store time series/event data
 - No plugins for complex functionality like [PostGIS](https://postgis.net/), your code will need logic for this
 
+Storage TL:DR
+
 ##### Raw JSON storage as TEXT in SQlite
 **Pros**
 - Super simple
@@ -63,19 +65,20 @@ Even though I've targeted SQLite as the DB of choice for portability/accessibili
 - Need to understand response schema and how to deal with it
 - Long queries since you need to destructure data every time you access it
 - If you have poorly structured JSON where every value is formatted as a string, you'll have even longer queries and embedded logic for how to handle specific data
-- Largest storage size (95M)
+- Largest storage size (94M)
 
 ##### Raw JSON storage as JSONB in SQlite
 **Pros**
-- Reduces storage space by x (95M -> XXM)
+- 🦗
 
 **Cons**
 - Requires SQLite +3.45.0 which probably won't be supported on most systems as of yet
 - Doesn't actually help with JSON queries
+- Doesn't actually reduce storage space by any significance (94M -> 93M)
 
 ##### JSONtoSQLAnalyzer in SQlite
 **Pros**
-- Reduces storage space by 2.7x (95M -> 35M)
+- Reduces storage space by 2.7x (94M -> 32M)
 - Makes data more relational
 - Simplifies queries a bit 
 - Could also be ported to other DBs
@@ -94,6 +97,7 @@ Even though I've targeted SQLite as the DB of choice for portability/accessibili
 - Not perfect, logic for some data types will still live in queries/code
 - No real improvement in storage size ¯\_(ツ)_/¯
 - Increased risk of having multiple data types, these will fallback to TEXT but it means more manual fixes
+- Somehow data size increases (32M -> 33M)
 
 **Neutral**
 - Further separates raw response data from stored response data

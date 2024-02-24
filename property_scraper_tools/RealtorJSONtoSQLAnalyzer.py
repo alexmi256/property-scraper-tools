@@ -217,7 +217,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 items_as_question_marks = ", ".join(["?"] * len(available_values))
 
                 template = (
-                    f"INSERT OR IGNORE INTO {table_name} {tuple(available_keys)} VALUES ({items_as_question_marks})"
+                    f"REPLACE INTO {table_name} {tuple(available_keys)} VALUES ({items_as_question_marks})"
                 )
 
                 statements.append((template, available_values))
@@ -301,7 +301,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 # We have a DB date from the file which we should prefer in the case of multiple DBs
                 date_in_old_file_name = re.search(r"\d{4}-\d{2}-\d{2}", str(old_db_name))
                 if date_in_old_file_name and (len(raw_dbs) > 1 or db_date is None):
-                    db_date = date_in_old_file_name.group().split("_")[-1][:-3]
+                    db_date = date_in_old_file_name.group()
                 elif db_date:
                     pass
                 else:
@@ -375,31 +375,6 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                         )
 
             connection.commit()
-
-
-config = {}
-
-# analyzer = RealtorJSONtoSQLAnalyzer(
-#     "mls_raw_2024-02-22.db", item_mutator=RealtorJSONtoSQLAnalyzer.data_mutator, auto_convert_simple_types=True
-# )
-
-# analyzer.convert_raw_json_db_to_sqlite()
-
-# analyzer.merge_multiple_raw_dbs_into_single_minimal_db(
-#     "mls_complete_minimal.db",
-#     [
-#         "mls_raw_2023-11-19.db",
-#         "mls_raw_2024-01-30.db",
-#         "mls_raw_2024-01-31.db",
-#         "mls_raw_2024-02-13.db",
-#         "mls_raw_2024-02-18.db",
-#         "mls_raw_2024-02-20.db",
-#         "mls_raw_2024-02-21.db",
-#         "mls_raw_2024-02-22.db",
-#     ],
-# )
-
-# analyzer.update_minimal_db_with_raw_db_results("mls_complete_minimal.db", "mls_raw_2024-02-22.db")
 
 
 if __name__ == "__main__":
@@ -477,10 +452,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--analyze-auto-covert-types",
+        "--auto-cast-value-types",
         default=True,
-        type=bool,
-        help="""When analyzing the database for printing or converting, we will try to convert string value types to simple data types.
+        action=argparse.BooleanOptionalAction,
+        help="""When analyzing the database for printing or converting, we will try to cast string value types to simple data types.
         The simple data types are string, bool, int, float which have semi-equivalent SQLite data types.
         The caveat of running with this option however is that depending on the raw data we can end up with multiple data type conversions.
         When this happens we fall back to string/TEXT data type.
@@ -520,10 +495,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+
     analyzer = RealtorJSONtoSQLAnalyzer(
         args.database[0],
         item_mutator=RealtorJSONtoSQLAnalyzer.data_mutator,
-        auto_convert_simple_types=args.analyze_auto_covert_types,
+        auto_convert_simple_types=args.auto_cast_value_types,
     )
 
     if args.analyze:
