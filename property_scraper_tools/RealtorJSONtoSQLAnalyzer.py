@@ -279,16 +279,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                     CREATE TABLE IF NOT EXISTS PriceHistory (
                         MlsNumber INTEGER,
                         Price     INTEGER NOT NULL,
-                        Date      TEXT    NOT NULL,
-                        FOREIGN KEY (
-                            MlsNumber
-                        )
-                        REFERENCES Listings (MlsNumber),
-                        UNIQUE (
-                            MlsNumber,
-                            Price,
-                            Date
-                        )
+                        Date      TEXT    NOT NULL
                     );
                 """
             self.create_sqlite_tables_from_statements(new_db_name, [price_history_table_sql])
@@ -369,8 +360,10 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                             listing["Property"]["PriceUnformattedValue"],
                             db_date,
                         ]
+                        sql = """
+                        REPLACE INTO PriceHistory (MlsNumber, Price, Date) VALUES (?, ?, ?);
+                        """
                         cursor.execute(
-                            "REPLACE INTO PriceHistory (MlsNumber, Price, Date) VALUES (?, ?, ?);",
                             price_history_values,
                         )
 
