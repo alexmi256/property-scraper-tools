@@ -8,6 +8,7 @@ from math import ceil
 from pprint import pprint
 from random import randint
 from time import sleep
+from pathlib import Path
 
 from queries import RealtorAPI
 from requests import HTTPError
@@ -29,8 +30,8 @@ SORT_VALUES = {
 
 
 class RealtorRawScraper:
-    def __init__(self, db_name="mls_raw.db"):
-        self.connection = sqlite3.connect(f"mls_raw_{str(date.today())}.db")
+    def __init__(self, city_name="city"):
+        self.connection = sqlite3.connect(f"{city_name}_raw_{str(date.today())}.db")
         self.min_sleep_time = 100
         self.total_parsed = 0
         self.parsed_mls_numbers = []
@@ -163,6 +164,33 @@ class RealtorRawScraper:
         pprint(response)
 
 
-scraper = RealtorRawScraper()
-scraper.parse_listings()
+# scraper = RealtorRawScraper()
+# scraper.parse_listings()
 # scraper.parse_listing_details(26418653, 13680165)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        prog="Realtor.ca Scraper and Database Updater",
+        description="""
+        Downloads Realtor.ca data for an area and stores it ina semi efficient database
+        """,
+    )
+
+    parser.add_argument(
+        "database",
+        type=Path,
+        help="Database to store data in",
+    )
+
+    parser.add_argument(
+        "--city",
+        default="montreal",
+        choices=["toronto", "montreal", "vancouver", "calgary", "edmonton", "ottawa"],
+        help="Which city should be data be parsed for. Also affects the name of the output DB.",
+    )
+
+    args = parser.parse_args()
+
+    scraper = RealtorRawScraper(city_name=args.city)
+    scraper.parse_listings()

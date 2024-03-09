@@ -292,15 +292,22 @@ INSERT OR IGNORE INTO Listings ('Id', 'MlsNumber', 'PublicRemarks', 'Building_St
 ```
 
 # TODO
+- [ ] Efficient price storage in minimal db
+  -  Kinda done but slow AF
+- [ ] Native city support
+- [ ] Add price storage to max db
+- [ ] Make Realtor mutator convert dates to iso8601
+- [ ] Allow updating to full db
+- [ ] Script to store from raw db into max or min db
 - [ ] Split off `JSONtoSQLAnalyzer` to its own repo
 - [ ] Make RealtorJSONtoSQLAnalyzer example work
 - [ ] More examples about usage and ideally code that explains what you should do
 - [ ] Fallback to TEXT when handling unsupported items such as lists or dicts
-- [ ] Examples
-- [ ] Compare split tables of JSON with new SQLite JSONB extension
 - [ ] Figure out multi-day data storage
 
 # Thanks
 * https://github.com/harry-s-grewal/mls-real-estate-scraper-for-realtor.ca
 * https://stackoverflow.com/questions/6027558/flatten-nested-dictionaries-compressing-keys
 * https://stackoverflow.com/questions/1832714/18-digit-timestamp/1832746#1832746
+* https://devblogs.microsoft.com/azure-sql/the-insert-if-not-exists-challenge-a-solution/
+* 

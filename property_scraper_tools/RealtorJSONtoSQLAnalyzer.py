@@ -4,9 +4,10 @@ import re
 import sqlite3
 from collections import Counter
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from pprint import pprint
+from typing import Callable
 
 import xxhash
 from JSONtoSQLAnalyzer import JSONtoSQLAnalyzer
@@ -19,6 +20,16 @@ logger = logging.getLogger(__name__)
 
 
 class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
+    def __init__(
+        self,
+        db_file: str,
+        city: str = "montreal",
+        item_mutator: Callable | None = None,
+        auto_convert_simple_types: bool = False,
+    ):
+        super().__init__(db_file, item_mutator=item_mutator, auto_convert_simple_types=auto_convert_simple_types)
+        self.city = city
+
     @staticmethod
     def data_mutator(current_dict_path, item):
         # Here $ represents the main dictionary
@@ -216,9 +227,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 available_values = [str(x) if isinstance(x, list) else x for x in available_values]
                 items_as_question_marks = ", ".join(["?"] * len(available_values))
 
-                template = (
-                    f"REPLACE INTO {table_name} {tuple(available_keys)} VALUES ({items_as_question_marks})"
-                )
+                template = f"REPLACE INTO {table_name} {tuple(available_keys)} VALUES ({items_as_question_marks})"
 
                 statements.append((template, available_values))
 
@@ -232,6 +241,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
         db_date: str | None = None,
         add_computed_columns: bool = True,
         minimal_config: bool = False,
+        skip_existing_dates: bool = False,
     ) -> None:
         columns_to_keep = [
             "AlternateURL_DetailsLink",
@@ -285,6 +295,35 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
             self.create_sqlite_tables_from_statements(new_db_name, [price_history_table_sql])
 
         with closing(sqlite3.connect(new_db_name)) as connection:
+
+            # FIXME: This could be a memory hog
+            IN_MEMORY_SPEEDUP = True
+            price_data = {}
+            if IN_MEMORY_SPEEDUP is True:
+                sql = """
+                SELECT MlsNumber,
+                       Property_PriceUnformattedValue,
+                       ComputedLastUpdated
+                  FROM Listings;
+                """
+                with closing(connection.cursor()) as cursor:
+                    rows = cursor.execute(sql).fetchall()
+                    for row in rows:
+                        price_data[row[0]] = {"price": row[1], "date": datetime.strptime(row[2], "%Y-%m-%d")}
+
+            latest_date_from_db = None
+            if skip_existing_dates:
+                sql = """
+                SELECT DISTINCT Date
+                  FROM PriceHistory
+                 ORDER BY DATE(Date) DESC
+                 LIMIT 1;
+                """
+                with closing(connection.cursor()) as cursor:
+                    row = cursor.execute(sql).fetchone()
+                    if row:
+                        latest_date_from_db = datetime.strptime(row[0], "%Y-%m-%d")
+
             for old_db_name in raw_dbs:
                 # WARN: This is hacky and no guarantee on actual dates
                 # If were merging multiple tables then we can't really rely on user input
@@ -297,6 +336,14 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                     pass
                 else:
                     raise Exception("Could not figure out date for DB to converet which will cause issues")
+
+                current_db_datetime = datetime.strptime(db_date, "%Y-%m-%d")
+
+                if skip_existing_dates and latest_date_from_db and current_db_datetime <= latest_date_from_db:
+                    print(
+                        f'Skipping {old_db_name} because its date "{db_date}" is before the latest date "{latest_date_from_db}" found in the db'
+                    )
+                    continue
 
                 listings = self.get_items_from_db(db_file=old_db_name)
 
@@ -320,14 +367,16 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
 
                     listing_interior_size = listing.get("Building", {}).get("SizeInterior")
                     if listing_interior_size:
-                        computed_columns["ComputedSQFT"] = round(
+                        computed_sqft = round(
                             RealtorJSONtoSQLAnalyzer.convert_interior_size_to_sqft(listing_interior_size)
                         )
-                        listing_price = listing.get("Property", {}).get("PriceUnformattedValue")
-                        if listing_price:
-                            computed_columns["ComputedPricePerSQFT"] = round(
-                                float(listing_price) / computed_columns["ComputedSQFT"]
-                            )
+                        if computed_sqft > 0:
+                            computed_columns["ComputedSQFT"] = computed_sqft
+                            listing_price = listing.get("Property", {}).get("PriceUnformattedValue")
+                            if listing_price:
+                                computed_columns["ComputedPricePerSQFT"] = round(
+                                    float(listing_price) / computed_columns["ComputedSQFT"]
+                                )
 
                     if add_computed_columns:
                         listing.update(computed_columns)
@@ -354,20 +403,33 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                         # Insert the items
                         for statement in statements:
                             cursor.execute(statement[0], statement[1])
-                        # And also insert the price history item
-                        price_history_values = [
-                            listing["MlsNumber"],
-                            listing["Property"]["PriceUnformattedValue"],
-                            db_date,
-                        ]
-                        sql = """
-                        REPLACE INTO PriceHistory (MlsNumber, Price, Date) VALUES (?, ?, ?);
-                        """
-                        cursor.execute(
-                            price_history_values,
-                        )
 
-            connection.commit()
+                        # only insert price history if we don't have data for the current listing OR
+                        # the price differs and the db date is greater than what the last saved price was
+                        # WARNING: This of course assumes that we're parsing databases by oldest to newest
+                        # I'm doing this just so that I only have to store the latest price
+                        if listing["MlsNumber"] not in price_data or (
+                            price_data[listing["MlsNumber"]]["price"] != listing["Property"]["PriceUnformattedValue"]
+                            and current_db_datetime > price_data[listing["MlsNumber"]]["date"]
+                        ):
+                            price_data[listing["MlsNumber"]] = {
+                                "price": listing["Property"]["PriceUnformattedValue"],
+                                "date": current_db_datetime,
+                            }
+                            sql = """
+                            INSERT INTO PriceHistory (MlsNumber, Price, Date) VALUES (?, ?, ?);
+                            """
+                            price_history_values = [
+                                listing["MlsNumber"],
+                                listing["Property"]["PriceUnformattedValue"],
+                                db_date,
+                            ]
+                            cursor.execute(
+                                sql,
+                                price_history_values,
+                            )
+                # Need to commit after every db?
+                connection.commit()
 
 
 if __name__ == "__main__":
@@ -389,6 +451,12 @@ if __name__ == "__main__":
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--city",
+        default="montreal",
+        choices=["toronto", "montreal", "vancouver", "calgary", "edmonton", "ottawa"],
+        help="Which city should be data be parsed for",
+    )
     group.add_argument(
         "-a",
         "--analyze",
@@ -481,16 +549,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "-u",
         "--update-output-db",
-        type=bool,
-        default=False,
+        action="store_true",
         help="Assume databases were already created and we just want to update the output",
+    )
+
+    parser.add_argument(
+        "--skip-existing-db-dates",
+        action="store_true",
+        help="When multiple databases are provided, with this option we will skip any databases that appear to already have been parsed",
     )
 
     args = parser.parse_args()
 
-
     analyzer = RealtorJSONtoSQLAnalyzer(
         args.database[0],
+        city=args.city,
         item_mutator=RealtorJSONtoSQLAnalyzer.data_mutator,
         auto_convert_simple_types=args.auto_cast_value_types,
     )
@@ -516,4 +589,5 @@ if __name__ == "__main__":
             create_new_tables=not args.update_output_db,
             db_date=args.db_date,
             minimal_config=args.minimal,
+            skip_existing_dates=args.skip_existing_db_dates,
         )
