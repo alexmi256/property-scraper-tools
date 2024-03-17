@@ -7,7 +7,7 @@ import time
 from collections import Counter
 from contextlib import closing
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from deepmerge import Merger
 from deepmerge_strategies import merge_counters, merge_lists_with_dict_items
@@ -23,7 +23,7 @@ class JSONtoSQLAnalyzer:
     def __init__(
         self,
         db_file: str,
-        item_mutator: Callable | None = None,
+        item_mutator: Optional[Callable] = None,
         auto_convert_simple_types: bool = False,
     ):
         self.created_tables = {}
