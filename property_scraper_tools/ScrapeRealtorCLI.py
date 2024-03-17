@@ -6,9 +6,9 @@ from contextlib import closing
 from datetime import date
 from math import ceil
 from pathlib import Path
-
 from random import randint
 from time import sleep
+from typing import Optional
 
 from queries import RealtorAPI
 from RealtorJSONtoSQLAnalyzer import RealtorJSONtoSQLAnalyzer
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class RealtorRawScraper:
-    def __init__(self, city_name: str, db_type: str, database_file: Path | None = None, create_db: bool = False):
+    def __init__(self, city_name: str, db_type: str, database_file: Optional[Path] = None, create_db: bool = False):
         self.city = city_name
         self.create_db = create_db
         self.db_type = db_type

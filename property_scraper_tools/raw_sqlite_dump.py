@@ -9,10 +9,11 @@ from pathlib import Path
 from pprint import pprint
 from random import randint
 from time import sleep
-from utils import CITIES
+
 from queries import RealtorAPI
 from requests import HTTPError
 from tqdm import tqdm
+from utils import CITIES
 
 logging.basicConfig(level=logging.DEBUG)
 
