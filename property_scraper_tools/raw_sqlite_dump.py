@@ -9,7 +9,7 @@ from pathlib import Path
 from pprint import pprint
 from random import randint
 from time import sleep
-
+from utils import CITIES
 from queries import RealtorAPI
 from requests import HTTPError
 from tqdm import tqdm
@@ -31,6 +31,7 @@ SORT_VALUES = {
 
 class RealtorRawScraper:
     def __init__(self, city_name="city"):
+        self.city_name = city_name
         self.connection = sqlite3.connect(f"{city_name}_raw_{str(date.today())}.db")
         self.min_sleep_time = 100
         self.total_parsed = 0
@@ -87,11 +88,12 @@ class RealtorRawScraper:
 
         logger.info(f'Parsed {self.total_parsed}/{response["Paging"]["TotalRecords"]}')
 
-    def parse_listings(self, city="Montreal, QC"):
-        latitude_min = "45.32146"
-        latitude_max = "45.79359"
-        longitude_min = "-74.20945"
-        longitude_max = "-73.23648"
+    def parse_listings(self):
+        latitude_min = CITIES[self.city_name]["LatitudeMin"]
+        latitude_max = CITIES[self.city_name]["LatitudeMax"]
+        longitude_min = CITIES[self.city_name]["LongitudeMin"]
+        longitude_max = CITIES[self.city_name]["LongitudeMax"]
+
         coords = [latitude_min, latitude_max, longitude_min, longitude_max]
         total_pages = 1
         current_date = str(date.today())
@@ -106,7 +108,7 @@ class RealtorRawScraper:
             self.write_response_results_to_db(response, current_date)
 
         except HTTPError:
-            logger.error(f"Failed retrieving response for first page of {city} ({coords})")
+            logger.error(f"Failed retrieving response for first page of {self.city_name} ({coords})")
             self.connection.close()
             raise
 
@@ -149,7 +151,7 @@ class RealtorRawScraper:
                     success = True
                 # Too many damn errors to handle
                 except Exception:
-                    logger.error(f"Attempt #{attempts}: Error occurred on city: {city}")
+                    logger.error(f"Attempt #{attempts}: Error occurred on city: {self.city_name}")
                     attempts += 1
                     if attempts > 4:
                         raise Exception("Too many failed attempts. Refresh cookies and try again")
@@ -186,7 +188,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--city",
         default="montreal",
-        choices=["toronto", "montreal", "vancouver", "calgary", "edmonton", "ottawa"],
+        choices=list(CITIES.keys()),
         help="Which city should be data be parsed for. Also affects the name of the output DB.",
     )
 

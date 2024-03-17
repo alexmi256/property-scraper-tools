@@ -6,7 +6,7 @@ from contextlib import closing
 from datetime import date
 from math import ceil
 from pathlib import Path
-from pprint import pprint
+
 from random import randint
 from time import sleep
 
@@ -14,23 +14,13 @@ from queries import RealtorAPI
 from RealtorJSONtoSQLAnalyzer import RealtorJSONtoSQLAnalyzer
 from requests import HTTPError
 from tqdm import tqdm
-from utils import CITIES
+from utils import CITIES, SORT_VALUES
 
 logging.basicConfig(
     level=logging.INFO, handlers=[logging.FileHandler("scrape_realtor_cli.log"), logging.StreamHandler()]
 )
 
 logger = logging.getLogger(__name__)
-#
-# with open("property_search_post.json", "r") as f:
-#     response = json.load(f)
-
-SORT_VALUES = {
-    "Newest": "6-D",
-    "Oldest": "6-A",
-    "Lowest price": "1-A",
-    "Highest price": "1-D",
-}
 
 
 class RealtorRawScraper:
@@ -54,7 +44,6 @@ class RealtorRawScraper:
                 cursor.execute(
                     "CREATE TABLE IF NOT EXISTS listings (id INTEGER PRIMARY KEY, details TEXT NOT NULL, last_updated TEXT NOT NULL)"
                 )
-                # cursor.execute("CREATE TABLE IF NOT EXISTS parse_times (page_number INTEGER, parse_time TEXT NOT NULL)")
                 self.connection.commit()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -69,20 +58,7 @@ class RealtorRawScraper:
         logger.debug(f"Sleeping {sleep_time} seconds")
         sleep(sleep_time)
 
-    # def parse_individual_listings(self, response: dict, partition: str):
-    #     logger.info(response["Paging"])
-    #
-    #     response_data = [(x["Id"], json.dumps(x), partition) for x in response["Results"]]
-    #     batch_of_parsed_mls_numbers = [x.get("MlsNumber") for x in response["Results"]]
-    #     number_already_parsed = len(set(self.parsed_mls_numbers).intersection(batch_of_parsed_mls_numbers))
-    #     if number_already_parsed > 2:
-    #         logger.info(
-    #             f"{number_already_parsed} of the {len(batch_of_parsed_mls_numbers)} items we parsed this batch had already been parsed"
-    #         )
-    #
-    #     return response_data
-
-    def write_response_results_to_raw_db(self, response):
+    def write_response_results_to_raw_db(self, response: dict):
         """
         Dumps the listing responses from realtor.ca as a json string blob
 
@@ -114,7 +90,7 @@ class RealtorRawScraper:
 
         logger.info(f'Parsed {self.total_parsed}/{response["Paging"]["TotalRecords"]}')
 
-    def parse_responses_and_update_db(self, response):
+    def parse_responses_and_update_db(self, response: dict):
         """
         Converts the raw responses and appends them to either a minimal or full db
 
@@ -122,7 +98,6 @@ class RealtorRawScraper:
         :return:
         """
         logger.info(response["Paging"])
-        scraped_date_str = str(self.parse_date)
 
         response_data = response["Results"]
         batch_of_parsed_mls_numbers = [x.get("MlsNumber") for x in response_data]
@@ -154,16 +129,11 @@ class RealtorRawScraper:
             add_computed_columns=True,
             minimal_config=self.db_type == "minimal",
         )
-
-        # TODO: process and insert the results
+        self.total_parsed += len(response_data)
 
         logger.info(f'Parsed {self.total_parsed}/{response["Paging"]["TotalRecords"]}')
 
     def parse_listings(self):
-        # latitude_min = "45.32146"
-        # latitude_max = "45.79359"
-        # longitude_min = "-74.20945"
-        # longitude_max = "-73.23648"
         latitude_min = CITIES[self.city]["LatitudeMin"]
         latitude_max = CITIES[self.city]["LatitudeMax"]
         longitude_min = CITIES[self.city]["LongitudeMin"]
@@ -258,12 +228,11 @@ class RealtorRawScraper:
                     self.cooldown(success)
 
         logger.info(f"Completed while parsing {total_pages} pages and {len(self.parsed_mls_numbers)} listings")
+
+        if self.create_db:
+            logger.info(f"Analyzing {len(raw_responses)} listings in order to create a new DB")
+
         self.api.save_cookies()
-
-
-# scraper = RealtorRawScraper()
-# scraper.parse_listings()
-# scraper.parse_listing_details(26418653, 13680165)
 
 
 if __name__ == "__main__":
@@ -295,7 +264,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--new-de",
+        "--new-db",
         action="store_true",
         help="TODO: Analyze and create a new DB from all the results we run the first time. Only useful if you have not created a db to store items before",
     )

@@ -292,13 +292,64 @@ INSERT OR IGNORE INTO Listings ('Id', 'MlsNumber', 'PublicRemarks', 'Building_St
 ```
 
 #### RealtorJSONtoSQLAnalyzer CLI
+```
+usage: Realtor.ca Database Analyzer and Updater [-h] [--city {toronto,calgary,ottawa,london,hamilton,edmonton,vancouver,mississauga,victoria,winnipeg,kelowna,burlington,oakville,kitchener,guelph,barrie,kingston,windsor,montreal,brampton,waterloo,cambridge,peterborough,oshawa,sarnia,milton,markham,etobicoke,brantford,surrey}] (-a | -c) [--print-sql]
+                                                [--new-table-name NEW_TABLE_NAME] [--auto-cast-value-types | --no-auto-cast-value-types] [-o OUTPUT_DATABASE] [--db-date DB_DATE] [-m] [-u] [--skip-existing-db-dates]
+                                                database [database ...]
+
+Analyzes databases storing raw JSON responses from realtor.ca and converts them into a database relational format. Extra functionality includes creating and updating minimal copies of such databases
+
+positional arguments:
+  database              The raw database file to perform analysis on. It must have a table named "Listings" and column "details". Multiple tables can be provided for extra actions but analysis will only be perform on the first one
+
+options:
+  -h, --help            show this help message and exit
+  --city {toronto,calgary,ottawa,london,hamilton,edmonton,vancouver,mississauga,victoria,winnipeg,kelowna,burlington,oakville,kitchener,guelph,barrie,kingston,windsor,montreal,brampton,waterloo,cambridge,peterborough,oshawa,sarnia,milton,markham,etobicoke,brantford,surrey}
+                        Which city should be data be parsed for
+  -a, --analyze         Perform the analysis on the database which will print out a dict object with counters of all the merged items.
+  -c, --convert         Silently analyze the raw JSON database and then convert it database to a SQL schemafull database
+  --print-sql           Analyzes the database and prints the SQL statements for creating the tables Note that further modifications will be performed on your data beyond your supplied "data_mutator" such as dict flattening.
+  --new-table-name NEW_TABLE_NAME
+                        The name of the SQLite table that will be used to store the newly converted object items. Since we receive just a list of items we can't properly guess the name of what the list of items should be.
+  --auto-cast-value-types, --no-auto-cast-value-types
+                        When analyzing the database for printing or converting, we will try to cast string value types to simple data types. The simple data types are string, bool, int, float which have semi-equivalent SQLite data types. The caveat of running with this option however is that depending on the raw data we can end up with multiple data type
+                        conversions. When this happens we fall back to string/TEXT data type. The fix for this is write custom logic the your "data_mutator" to handle these conflicting conversions before we try to auto-convert.
+  -o OUTPUT_DATABASE, --output-database OUTPUT_DATABASE
+                        The name of the db that the analyzed results will be output to
+  --db-date DB_DATE     The date of the given database. This affects some of the generated data we store for items.
+  -m, --minimal         If the output database format should be minimal instead of full
+  -u, --update-output-db
+                        Assume databases were already created so this db creation will be skipped and we'll just insert items
+  --skip-existing-db-dates
+                        When multiple databases are provided, with this option we will skip any databases that appear to already have been parsed
+```
+
 Create a new full db from existing raw scrapes
 `python property_scraper_tools/RealtorJSONtoSQLAnalyzer.py --convert mls_raw_202* --output-database=montreal_full.sqlite`
 
 Incrementally update a minimal db from existing raw scrapes
 `python property_scraper_tools/RealtorJSONtoSQLAnalyzer.py --convert mls_raw_202* --output-database=montreal.sqlite --minimal --skip-existing-db-dates --update-output-db`
 
+#### ScrapeRealtorCLI
+```
+usage: Realtor.ca Scraper and Database Updater [-h] [--city {toronto,calgary,ottawa,london,hamilton,edmonton,vancouver,mississauga,victoria,winnipeg,kelowna,burlington,oakville,kitchener,guelph,barrie,kingston,windsor,montreal,brampton,waterloo,cambridge,peterborough,oshawa,sarnia,milton,markham,etobicoke,brantford,surrey}] [--store {raw,full,minimal}] [--new-de]
+                                               database
 
+Downloads Realtor.ca data for an area and stores it in a semi efficient database
+
+positional arguments:
+  database              Name of the database to store listings in
+
+options:
+  -h, --help            show this help message and exit
+  --city {toronto,calgary,ottawa,london,hamilton,edmonton,vancouver,mississauga,victoria,winnipeg,kelowna,burlington,oakville,kitchener,guelph,barrie,kingston,windsor,montreal,brampton,waterloo,cambridge,peterborough,oshawa,sarnia,milton,markham,etobicoke,brantford,surrey}
+                        Which city should be data be parsed for. Also affects the name of the output DB.
+  --store {raw,full,minimal}
+                        What data format the JSON should be stored in the SQWLite DB. Raw unprocessed JSON, Processed JSON, or a minimal subset of Processed JSON
+  --new-db              TODO: Analyze and create a new DB from all the results we run the first time. Only useful if you have not created a db to store items before
+```
+Update DB with current results:
+`python property_scraper_tools/ScrapeRealtorCLI.py --city=montreal --store=full montreal_full.sqlite`
 
 # TODO
 - [ ] Native city support

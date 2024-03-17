@@ -178,3 +178,4 @@ mls_blocklist.txt
 property_scraper_tools/display_properties.py
 stations.geojson
 *.sqlite
+property-scraper-tools.tar.gz

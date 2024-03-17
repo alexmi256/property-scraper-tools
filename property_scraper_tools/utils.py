@@ -267,10 +267,10 @@ CITIES = {
         "LongitudeMin": "-83.27979",
     },
     "montreal": {
-        "LatitudeMax": "45.74377",
-        "LongitudeMax": "-73.16919",
-        "LatitudeMin": "45.37165",
-        "LongitudeMin": "-74.27674",
+        "LatitudeMax": "45.79359",
+        "LongitudeMax": "-73.23648",
+        "LatitudeMin": "45.32146",
+        "LongitudeMin": "-74.20945",
     },
     "brampton": {
         "LatitudeMax": "43.91683",
@@ -338,4 +338,11 @@ CITIES = {
         "LatitudeMin": "48.93747",
         "LongitudeMin": "-123.37226",
     },
+}
+
+SORT_VALUES = {
+    "Newest": "6-D",
+    "Oldest": "6-A",
+    "Lowest price": "1-A",
+    "Highest price": "1-D",
 }
