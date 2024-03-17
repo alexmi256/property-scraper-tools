@@ -176,10 +176,10 @@ class RealtorRawScraper:
 
         if total_pages > 50:
             logger.info(
-                f"There are {total_pages} listed and we can only parse 50 so we will need to parse forwards and backwards"
+                f"There are {total_pages} pages listed and we can only parse 50 so we will need to parse forwards and backwards"
             )
         if total_pages > 100:
-            logger.warning(f"There are {total_pages} listed but we can only parse 100 so data will be missed")
+            logger.warning(f"There are {total_pages} pages listed but we can only parse 100 so data will be missed")
 
         parse_forward = 50 if total_pages > 50 else total_pages
         parse_backward = total_pages - 50 if total_pages > 50 else 0

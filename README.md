@@ -113,6 +113,8 @@ pprint(merged_item)
 ```
 **Output**
 ```python
+from collections import Counter
+
 {'AlternateURL': {'DetailsLink': Counter({'str': 16325}),
                   'VideoLink': Counter({'str': 2690})},
  'Building': {'BathroomTotal': Counter({'str': 15626}),
@@ -352,7 +354,7 @@ Update DB with current results:
 `python property_scraper_tools/ScrapeRealtorCLI.py --city=montreal --store=full montreal_full.sqlite`
 
 # TODO
-- [ ] Native city support
+- [ ] Fix file logging
 - [ ] Split off `JSONtoSQLAnalyzer` to its own repo
 - [ ] Make RealtorJSONtoSQLAnalyzer example work
 - [ ] More examples about usage and ideally code that explains what you should do
