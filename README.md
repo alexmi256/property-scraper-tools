@@ -301,18 +301,11 @@ Incrementally update a minimal db from existing raw scrapes
 
 
 # TODO
-- [ ] Efficient price storage in minimal db
-  -  Kinda done but slow AF
 - [ ] Native city support
-- [ ] Add price storage to max db
-- [ ] Make Realtor mutator convert dates to iso8601
-- [ ] Allow updating to full db
-- [ ] Script to store from raw db into max or min db
 - [ ] Split off `JSONtoSQLAnalyzer` to its own repo
 - [ ] Make RealtorJSONtoSQLAnalyzer example work
 - [ ] More examples about usage and ideally code that explains what you should do
 - [ ] Fallback to TEXT when handling unsupported items such as lists or dicts
-- [ ] Figure out multi-day data storage
 
 # Thanks
 * https://github.com/harry-s-grewal/mls-real-estate-scraper-for-realtor.ca

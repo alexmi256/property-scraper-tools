@@ -83,9 +83,18 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
             # https://stackoverflow.com/questions/1832714/18-digit-timestamp/1832746#1832746
             if "InsertedDateUTC" in item:
                 c_ticks_time = 62135596800
-                item["InsertedDateUTC"] = str(
-                    datetime.utcfromtimestamp(int(item["InsertedDateUTC"][:11]) - c_ticks_time)
-                )
+                item["InsertedDateUTC"] = datetime.utcfromtimestamp(
+                    int(item["InsertedDateUTC"][:11]) - c_ticks_time
+                ).isoformat()
+
+            almost_iso8601_dates = [
+                x
+                for x in item.keys()
+                if (x.endswith("DateUTC") or x.endswith("LastUpdated")) and x != "InsertedDateUTC"
+            ]
+            if almost_iso8601_dates:
+                for key_name in almost_iso8601_dates:
+                    item[key_name] = datetime.strptime(item[key_name], "%Y-%m-%d %I:%M:%S %p").isoformat()
 
         if current_dict_path.endswith("Address"):
             useless_keys = ["DisseminationArea"]
@@ -93,6 +102,12 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 if useless_key in item:
                     # Doesn't have any data ever
                     del item[useless_key]
+
+        if "OpenHouse" in current_dict_path:
+            if "StartDateTime" in item:
+                item["StartDateTime"] = datetime.strptime(item["StartDateTime"], "%d/%m/%Y %I:%M:%S %p").isoformat()
+            if "EndDateTime" in item:
+                item["EndDateTime"] = datetime.strptime(item["EndDateTime"], "%d/%m/%Y %I:%M:%S %p").isoformat()
 
         if current_dict_path == "$.Property":
             for key_name in ["Photo"]:
@@ -106,6 +121,10 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                         item[key_name] = item[key_name][0]
                     else:
                         item[key_name] = None
+                    if item[key_name].get("LastUpdated"):
+                        item[key_name]["LastUpdated"] = datetime.strptime(
+                            item[key_name]["LastUpdated"], "%Y-%m-%d %I:%M:%S %p"
+                        ).isoformat()
                     # for list_item in item[key_name]:
                     #     list_item[f"{key_name}GeneratedId"] = xxhash.xxh32(str(SortedDict(list_item))).intdigest()
 
@@ -132,6 +151,11 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
             for key_name in ["Organization"]:
                 item[key_name] = [item[key_name]]
 
+            if "AgentPhotoLastUpdated" in item:
+                item["AgentPhotoLastUpdated"] = datetime.strptime(
+                    item["AgentPhotoLastUpdated"], "%Y-%m-%d %H:%M:%S"
+                ).isoformat()
+
         if current_dict_path == "$.Individual.[].Organization.[]" or current_dict_path == "$.Individual.[]":
             # Phones can be simplified
             for key_name in ["Phones"]:
@@ -152,6 +176,8 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
             for key_name in ["Emails"]:
                 if key_name in item:
                     item[key_name] = ",".join([x["ContactId"] for x in item[key_name]])
+            if "PhotoLastupdate" in item:
+                item["PhotoLastupdate"] = datetime.strptime(item["PhotoLastupdate"], "%Y-%m-%d %I:%M:%S %p").isoformat()
 
     @staticmethod
     def convert_interior_size_to_sqft(building_size_interior: str) -> float:
