@@ -4,7 +4,7 @@ import re
 import sqlite3
 from collections import Counter
 from contextlib import closing
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
 from pprint import pprint
 from typing import Callable
@@ -13,6 +13,7 @@ import xxhash
 from JSONtoSQLAnalyzer import JSONtoSQLAnalyzer
 from sortedcontainers import SortedDict
 from tqdm import tqdm
+from utils import CITIES
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,6 +30,37 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
     ):
         super().__init__(db_file, item_mutator=item_mutator, auto_convert_simple_types=auto_convert_simple_types)
         self.city = city
+        self.minimal_columns = [
+            "AlternateURL_DetailsLink",
+            "AlternateURL_VideoLink",
+            "Building_BathroomTotal",
+            "Building_Bedrooms",
+            "Building_SizeExterior",
+            "Building_SizeInterior",
+            "Building_StoriesTotal",
+            "Building_Type",
+            "Building_UnitTotal",
+            "Id",
+            "InsertedDateUTC",
+            "Land_SizeFrontage",
+            "Land_SizeTotal",
+            "MlsNumber",
+            "PostalCode",
+            "PriceChangeDateUTC",
+            "Property_Address_AddressText",
+            "Property_Address_Latitude",
+            "Property_Address_Longitude",
+            "Property_AmmenitiesNearBy",
+            "Property_OwnershipType",
+            "Property_Parking",
+            "Property_ParkingSpaceTotal",
+            "Property_Photo_HighResPath",
+            "Property_PriceUnformattedValue",
+            "Property_ZoningType",
+            "Property_Type",
+            "PublicRemarks",
+            "RelativeDetailsURL",
+        ]
 
     @staticmethod
     def data_mutator(current_dict_path, item):
@@ -54,6 +86,13 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 item["InsertedDateUTC"] = str(
                     datetime.utcfromtimestamp(int(item["InsertedDateUTC"][:11]) - c_ticks_time)
                 )
+
+        if current_dict_path.endswith("Address"):
+            useless_keys = ["DisseminationArea"]
+            for useless_key in useless_keys:
+                if useless_key in item:
+                    # Doesn't have any data ever
+                    del item[useless_key]
 
         if current_dict_path == "$.Property":
             for key_name in ["Photo"]:
@@ -192,8 +231,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 item["ComputedNewBuild"] = Counter(bool=1)
 
         tables_to_create = self.get_sqlite_sql_for_merged_counter_dict(
-            results,
-            default_table_key_name=default_table_key_name,
+            results, default_table_key_name=default_table_key_name, cannot_be_not_null=["Property_FarmType"]
         )
 
         return tables_to_create
@@ -233,203 +271,202 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
 
         return statements
 
-    def merge_multiple_raw_dbs_into_single_minimal_db(
+    def create_initial_tables(self, new_db_name: str, add_computed_columns: bool, minimal_config: bool):
+        create_table_sql_statements = self.get_sqlite_sql_for_dbschema_from_raw_items(
+            columns_to_keep=self.minimal_columns if minimal_config else None,
+            default_table_key_name="Listings",
+            keep_only_main_item=minimal_config,
+            # Only applicable for this custom class
+            add_computed_columns=add_computed_columns,
+        )
+        self.create_sqlite_tables_from_statements(new_db_name, create_table_sql_statements)
+
+        price_history_table_sql = """
+                            CREATE TABLE IF NOT EXISTS PriceHistory (
+                                MlsNumber INTEGER,
+                                Price     INTEGER NOT NULL,
+                                Date      TEXT    NOT NULL
+                            );
+                        """
+        self.create_sqlite_tables_from_statements(new_db_name, [price_history_table_sql])
+
+    def get_existing_price_data(self, db_name: str, listings: None | list[int] = None) -> dict:
+        limit_to_listings = f" WHERE MlsNumber IN {tuple(listings)};" if listings else ";"
+        sql = f"""
+        SELECT MlsNumber,
+               Property_PriceUnformattedValue,
+               ComputedLastUpdated
+          FROM Listings {limit_to_listings}
+        """
+        price_data = {}
+        with closing(sqlite3.connect(db_name)) as connection:
+            with closing(connection.cursor()) as cursor:
+                rows = cursor.execute(sql).fetchall()
+                for row in rows:
+                    price_data[row[0]] = {"price": row[1], "date": datetime.strptime(row[2], "%Y-%m-%d")}
+        return price_data
+
+    def find_latest_price_date_from_db(self, db_name: str) -> datetime | None:
+        sql = """
+        SELECT DISTINCT Date
+          FROM PriceHistory
+         ORDER BY DATE(Date) DESC
+         LIMIT 1;
+        """
+        with closing(sqlite3.connect(db_name)) as connection:
+            with closing(connection.cursor()) as cursor:
+                row = cursor.execute(sql).fetchone()
+                # FIXME: Return today's date if nothing found
+                if row:
+                    return datetime.strptime(row[0], "%Y-%m-%d")
+
+    # FIXME: Variables need to be changed not to reflect a db file but a grouping of listings
+    def insert_listings_into_db(
+        self,
+        listings: list,
+        db_name: str,
+        parsed_date: date,
+        price_data: dict,
+        add_computed_columns: bool = True,
+        minimal_config: bool = False,
+    ):
+        parsed_date_str = parsed_date.strftime("%Y-%m-%d")
+        with closing(sqlite3.connect(db_name)) as connection:
+            for listing in tqdm(listings, desc=f"Rows inserted into {db_name}"):
+                self.modify_dict(listing)
+                computed_columns = {
+                    "ComputedSQFT": None,
+                    "ComputedPricePerSQFT": None,
+                    "ComputedLastUpdated": parsed_date_str,
+                    "ComputedNewBuild": False,
+                }
+
+                listing_is_new_build = "GST +  QST" in listing.get("Property", {}).get("Price", "")
+                if listing_is_new_build:
+                    computed_columns["ComputedNewBuild"] = True
+                    # If it's a new build it will have 15% taxes which we want to auto add cuz that's just a hidden fee
+                    if listing.get("Property", {}).get("PriceUnformattedValue"):
+                        listing["Property"]["PriceUnformattedValue"] = round(
+                            listing["Property"]["PriceUnformattedValue"] * 1.14975
+                        )
+
+                listing_interior_size = listing.get("Building", {}).get("SizeInterior")
+                if listing_interior_size:
+                    computed_sqft = round(RealtorJSONtoSQLAnalyzer.convert_interior_size_to_sqft(listing_interior_size))
+                    if computed_sqft > 0:
+                        computed_columns["ComputedSQFT"] = computed_sqft
+                        listing_price = listing.get("Property", {}).get("PriceUnformattedValue")
+                        if listing_price:
+                            computed_columns["ComputedPricePerSQFT"] = round(
+                                float(listing_price) / computed_columns["ComputedSQFT"]
+                            )
+
+                if add_computed_columns:
+                    listing.update(computed_columns)
+
+                results = {}
+                # WARNING: This is what flattens our dict item by default
+                self.split_lists_from_item(listing, items_to_create=results)
+
+                # Remove all data but the main Listings/$ object
+                if minimal_config:
+                    for keyname in list(results.keys()):
+                        if keyname != "$":
+                            del results[keyname]
+
+                # TODO: Make function below support config for keeping only columns and keys
+                # NOTE: With current setup there will only ever be one statement since we're only inserting the main item
+                statements = self.generate_sqlite_sql_for_inserting_split_item(
+                    results,
+                    # FIXME: This needs to be baked into argparse
+                    default_table_key_name="Listings",
+                    limit_to_columns=(self.minimal_columns + list(computed_columns.keys()) if minimal_config else None),
+                )
+                with closing(connection.cursor()) as cursor:
+                    # Insert the items
+                    for statement in statements:
+                        cursor.execute(statement[0], statement[1])
+
+                    # only insert price history if we don't have data for the current listing OR
+                    # the price differs and the db date is greater than what the last saved price was
+                    # WARNING: This of course assumes that we're parsing databases by oldest to newest
+                    # I'm doing this just so that I only have to store the latest price
+                    if listing["MlsNumber"] not in price_data or (
+                        price_data[listing["MlsNumber"]]["price"] != listing["Property"]["PriceUnformattedValue"]
+                        and parsed_date > price_data[listing["MlsNumber"]]["date"]
+                    ):
+                        price_data[listing["MlsNumber"]] = {
+                            "price": listing["Property"]["PriceUnformattedValue"],
+                            "date": parsed_date,
+                        }
+                        sql = """
+                        INSERT INTO PriceHistory (MlsNumber, Price, Date) VALUES (?, ?, ?);
+                        """
+                        price_history_values = [
+                            listing["MlsNumber"],
+                            listing["Property"]["PriceUnformattedValue"],
+                            parsed_date_str,
+                        ]
+                        cursor.execute(
+                            sql,
+                            price_history_values,
+                        )
+            # Need to commit after every db?
+            connection.commit()
+
+    def merge_multiple_raw_dbs_into_single_db(
         self,
         new_db_name: str,
         raw_dbs: list[str],
         create_new_tables: bool = True,
-        db_date: str | None = None,
+        db_date: date | None = None,
         add_computed_columns: bool = True,
         minimal_config: bool = False,
         skip_existing_dates: bool = False,
     ) -> None:
-        columns_to_keep = [
-            "AlternateURL_DetailsLink",
-            "AlternateURL_VideoLink",
-            "Building_BathroomTotal",
-            "Building_Bedrooms",
-            "Building_SizeExterior",
-            "Building_SizeInterior",
-            "Building_StoriesTotal",
-            "Building_Type",
-            "Building_UnitTotal",
-            "Id",
-            "InsertedDateUTC",
-            "Land_SizeFrontage",
-            "Land_SizeTotal",
-            "MlsNumber",
-            "PostalCode",
-            "PriceChangeDateUTC",
-            "Property_Address_AddressText",
-            "Property_Address_Latitude",
-            "Property_Address_Longitude",
-            "Property_AmmenitiesNearBy",
-            "Property_OwnershipType",
-            "Property_Parking",
-            "Property_ParkingSpaceTotal",
-            "Property_Photo_HighResPath",
-            "Property_PriceUnformattedValue",
-            "Property_ZoningType",
-            "Property_Type",
-            "PublicRemarks",
-            "RelativeDetailsURL",
-        ]
 
         if create_new_tables:
-            create_table_sql_statements = self.get_sqlite_sql_for_dbschema_from_raw_items(
-                columns_to_keep=columns_to_keep if minimal_config else None,
-                default_table_key_name="Listings",
-                keep_only_main_item=minimal_config,
-                # Only applicable for this custom class
+            self.create_initial_tables(new_db_name, add_computed_columns, minimal_config)
+
+        # FIXME: This could be a memory hog and should be done in SQL but all my attempts have sucked and didn't
+        #  work or were super slow. The memory thing is only an issue when dealing with a whole DB and not prominent
+        #  with live scraping which only has about 200 listings at a time
+        price_data = self.get_existing_price_data(new_db_name)
+
+        latest_date_from_db = None
+        if skip_existing_dates:
+            latest_date_from_db = self.find_latest_price_date_from_db(new_db_name)
+
+        for old_db_name in raw_dbs:
+            # WARN: This is hacky and no guarantee on actual dates
+            # If were merging multiple tables then we can't really rely on user input
+
+            # We have a DB date from the file which we should prefer in the case of multiple DBs
+            date_in_old_file_name = re.search(r"\d{4}-\d{2}-\d{2}", str(old_db_name))
+            if date_in_old_file_name and (len(raw_dbs) > 1 or db_date is None):
+                db_date = datetime.strptime(date_in_old_file_name.group(), "%Y-%m-%d")
+            elif not db_date:
+                raise Exception("Could not figure out date for DB to convert which will cause issues")
+
+            if skip_existing_dates and latest_date_from_db and db_date <= latest_date_from_db:
+                logger.info(
+                    f'Skipping {old_db_name} because its date "{db_date}" is before the latest date "{latest_date_from_db}" found in the db'
+                )
+                continue
+            else:
+                logger.info(
+                    f'Processing "{old_db_name}" because its date "{db_date}" is after the latest date "{latest_date_from_db}" found in the db'
+                )
+
+            listings = self.get_items_from_db(db_file=old_db_name)
+            self.insert_listings_into_db(
+                listings,
+                db_name=new_db_name,
+                parsed_date=db_date,
+                price_data=price_data,
                 add_computed_columns=add_computed_columns,
+                minimal_config=minimal_config,
             )
-            self.create_sqlite_tables_from_statements(new_db_name, create_table_sql_statements)
-
-            price_history_table_sql = """
-                    CREATE TABLE IF NOT EXISTS PriceHistory (
-                        MlsNumber INTEGER,
-                        Price     INTEGER NOT NULL,
-                        Date      TEXT    NOT NULL
-                    );
-                """
-            self.create_sqlite_tables_from_statements(new_db_name, [price_history_table_sql])
-
-        with closing(sqlite3.connect(new_db_name)) as connection:
-
-            # FIXME: This could be a memory hog
-            IN_MEMORY_SPEEDUP = True
-            price_data = {}
-            if IN_MEMORY_SPEEDUP is True:
-                sql = """
-                SELECT MlsNumber,
-                       Property_PriceUnformattedValue,
-                       ComputedLastUpdated
-                  FROM Listings;
-                """
-                with closing(connection.cursor()) as cursor:
-                    rows = cursor.execute(sql).fetchall()
-                    for row in rows:
-                        price_data[row[0]] = {"price": row[1], "date": datetime.strptime(row[2], "%Y-%m-%d")}
-
-            latest_date_from_db = None
-            if skip_existing_dates:
-                sql = """
-                SELECT DISTINCT Date
-                  FROM PriceHistory
-                 ORDER BY DATE(Date) DESC
-                 LIMIT 1;
-                """
-                with closing(connection.cursor()) as cursor:
-                    row = cursor.execute(sql).fetchone()
-                    if row:
-                        latest_date_from_db = datetime.strptime(row[0], "%Y-%m-%d")
-
-            for old_db_name in raw_dbs:
-                # WARN: This is hacky and no guarantee on actual dates
-                # If were merging multiple tables then we can't really rely on user input
-
-                # We have a DB date from the file which we should prefer in the case of multiple DBs
-                date_in_old_file_name = re.search(r"\d{4}-\d{2}-\d{2}", str(old_db_name))
-                if date_in_old_file_name and (len(raw_dbs) > 1 or db_date is None):
-                    db_date = date_in_old_file_name.group()
-                elif db_date:
-                    pass
-                else:
-                    raise Exception("Could not figure out date for DB to converet which will cause issues")
-
-                current_db_datetime = datetime.strptime(db_date, "%Y-%m-%d")
-
-                if skip_existing_dates and latest_date_from_db and current_db_datetime <= latest_date_from_db:
-                    print(
-                        f'Skipping {old_db_name} because its date "{db_date}" is before the latest date "{latest_date_from_db}" found in the db'
-                    )
-                    continue
-
-                listings = self.get_items_from_db(db_file=old_db_name)
-
-                for listing in tqdm(listings, desc=f"Rows Processed for {old_db_name}"):
-                    self.modify_dict(listing)
-                    computed_columns = {
-                        "ComputedSQFT": None,
-                        "ComputedPricePerSQFT": None,
-                        "ComputedLastUpdated": db_date,
-                        "ComputedNewBuild": False,
-                    }
-
-                    listing_is_new_build = "GST +  QST" in listing.get("Property", {}).get("Price", "")
-                    if listing_is_new_build:
-                        computed_columns["ComputedNewBuild"] = True
-                        # If it's a new build it will have 15% taxes which we want to auto add cuz that's just a hidden fee
-                        if listing.get("Property", {}).get("PriceUnformattedValue"):
-                            listing["Property"]["PriceUnformattedValue"] = round(
-                                listing["Property"]["PriceUnformattedValue"] * 1.14975
-                            )
-
-                    listing_interior_size = listing.get("Building", {}).get("SizeInterior")
-                    if listing_interior_size:
-                        computed_sqft = round(
-                            RealtorJSONtoSQLAnalyzer.convert_interior_size_to_sqft(listing_interior_size)
-                        )
-                        if computed_sqft > 0:
-                            computed_columns["ComputedSQFT"] = computed_sqft
-                            listing_price = listing.get("Property", {}).get("PriceUnformattedValue")
-                            if listing_price:
-                                computed_columns["ComputedPricePerSQFT"] = round(
-                                    float(listing_price) / computed_columns["ComputedSQFT"]
-                                )
-
-                    if add_computed_columns:
-                        listing.update(computed_columns)
-
-                    results = {}
-                    # WARNING: This is what flattens our dict item by default
-                    self.split_lists_from_item(listing, items_to_create=results)
-
-                    # Remove all data but the main Listings/$ object
-                    if minimal_config:
-                        for keyname in list(results.keys()):
-                            if keyname != "$":
-                                del results[keyname]
-
-                    # TODO: Make function below support config for keeping only columns and keys
-                    # NOTE: With current setup there will only ever be one statement since we're only inserting the main item
-                    statements = self.generate_sqlite_sql_for_inserting_split_item(
-                        results,
-                        # FIXME: This needs to be baked into argparse
-                        default_table_key_name="Listings",
-                        limit_to_columns=(columns_to_keep + list(computed_columns.keys()) if minimal_config else None),
-                    )
-                    with closing(connection.cursor()) as cursor:
-                        # Insert the items
-                        for statement in statements:
-                            cursor.execute(statement[0], statement[1])
-
-                        # only insert price history if we don't have data for the current listing OR
-                        # the price differs and the db date is greater than what the last saved price was
-                        # WARNING: This of course assumes that we're parsing databases by oldest to newest
-                        # I'm doing this just so that I only have to store the latest price
-                        if listing["MlsNumber"] not in price_data or (
-                            price_data[listing["MlsNumber"]]["price"] != listing["Property"]["PriceUnformattedValue"]
-                            and current_db_datetime > price_data[listing["MlsNumber"]]["date"]
-                        ):
-                            price_data[listing["MlsNumber"]] = {
-                                "price": listing["Property"]["PriceUnformattedValue"],
-                                "date": current_db_datetime,
-                            }
-                            sql = """
-                            INSERT INTO PriceHistory (MlsNumber, Price, Date) VALUES (?, ?, ?);
-                            """
-                            price_history_values = [
-                                listing["MlsNumber"],
-                                listing["Property"]["PriceUnformattedValue"],
-                                db_date,
-                            ]
-                            cursor.execute(
-                                sql,
-                                price_history_values,
-                            )
-                # Need to commit after every db?
-                connection.commit()
 
 
 if __name__ == "__main__":
@@ -450,13 +487,14 @@ if __name__ == "__main__":
              Multiple tables can be provided for extra actions but analysis will only be perform on the first one""",
     )
 
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
+    parser.add_argument(
         "--city",
         default="montreal",
-        choices=["toronto", "montreal", "vancouver", "calgary", "edmonton", "ottawa"],
+        choices=list(CITIES.keys()),
         help="Which city should be data be parsed for",
     )
+
+    group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "-a",
         "--analyze",
@@ -550,7 +588,7 @@ if __name__ == "__main__":
         "-u",
         "--update-output-db",
         action="store_true",
-        help="Assume databases were already created and we just want to update the output",
+        help="Assume databases were already created so this db creation will be skipped and we'll just insert items",
     )
 
     parser.add_argument(
@@ -583,7 +621,7 @@ if __name__ == "__main__":
             for table in tables_to_create:
                 print(table)
     elif args.convert:
-        analyzer.merge_multiple_raw_dbs_into_single_minimal_db(
+        analyzer.merge_multiple_raw_dbs_into_single_db(
             new_db_name=args.output_database,
             raw_dbs=args.database,
             create_new_tables=not args.update_output_db,

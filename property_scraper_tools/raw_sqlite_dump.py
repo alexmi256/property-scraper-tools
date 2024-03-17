@@ -5,10 +5,10 @@ import sqlite3
 from contextlib import closing
 from datetime import date
 from math import ceil
+from pathlib import Path
 from pprint import pprint
 from random import randint
 from time import sleep
-from pathlib import Path
 
 from queries import RealtorAPI
 from requests import HTTPError

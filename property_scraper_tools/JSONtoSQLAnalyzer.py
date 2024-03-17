@@ -4,9 +4,9 @@ import logging
 import re
 import sqlite3
 import time
-from pathlib import Path
 from collections import Counter
 from contextlib import closing
+from pathlib import Path
 from typing import Callable
 
 from deepmerge import Merger
@@ -353,7 +353,7 @@ class JSONtoSQLAnalyzer:
         """
         items = self.get_items_from_db()
 
-        for item in tqdm(items, desc="Items Modified for SQL Schema Analysis", miniters=1):
+        for item in tqdm(items, desc=f"Items Modified for SQL Schema Analysis of {self.db_file}", miniters=1):
             # Modify the item so that it will fit into a relational db better
             # i.e. Adding GeneratedIDs, making some list become dicts, etc...
             # This is also where we can control whether we do simple value conversions
@@ -375,7 +375,7 @@ class JSONtoSQLAnalyzer:
         merged_items = {}
 
         # Merge all the items into one which will now have Counter of data types so that we can see data consistency
-        for item in tqdm(items, desc="Items Merged for SQL Schema Analysis"):
+        for item in tqdm(items, desc=f"Items Merged for SQL Schema Analysis of {self.db_file}"):
             merged_items = custom_merger.merge(merged_items, item)
 
         return merged_items
@@ -462,13 +462,12 @@ class JSONtoSQLAnalyzer:
             connection.commit()
 
     def get_sqlite_sql_for_merged_counter_dict(
-        self,
-        merged_item_results,
-        default_table_key_name: str = "items",
+        self, merged_item_results, default_table_key_name: str = "items", cannot_be_not_null: list[str] | None = None
     ) -> list[str]:
         """
         This will return you a list of SQL statements used for creating the necessary table given your derived schema
 
+        :param cannot_be_not_null: A list of column names that should never be made NOT NULL, useful when sample size is small or misleading
         :param merged_item_results:
         :param default_table_key_name: The name of the default table your "items" will be placed in
         :return:
@@ -497,13 +496,22 @@ class JSONtoSQLAnalyzer:
                 for column_name, column_type_counter in dict_item.items():
                     if column_type_counter is None:
                         logger.error(
-                            f"Column  {item_path}.{column_name} has no data type and thus is messing up data and needs to be dealt with"
+                            f"Column {item_path}.{column_name} has no data type and thus is messing up data and needs to be dealt with"
                         )
                         continue
-                    could_be_non_null = True
+                    # This is hell
+                    could_be_non_null = False if cannot_be_not_null and column_name in cannot_be_not_null else True
                     if type(column_type_counter) is Counter and "NoneType" in column_type_counter:
+                        # WARNING: Another special check to see if all values were none in which case this column is either
+                        #   useless trash or we didn't parse enough results to see what it could be
+                        if column_type_counter.get("NoneType") == num_items_in_db:
+                            logger.error(
+                                f"Column {item_path}.{column_name} only had None/NULL data types across all {num_items_in_db} instances so it will be skipped"
+                            )
+                            continue
                         del column_type_counter["NoneType"]
                         could_be_non_null = False
+                        # FIXME: This may be outdated and never reachable
                         if len(column_type_counter) == 0:
                             logger.error(
                                 f"Column {item_path}.{column_name} has no data in its counter after removing NoneType counters, assuming TEXT"

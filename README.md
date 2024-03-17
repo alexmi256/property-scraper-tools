@@ -291,6 +291,15 @@ INSERT OR IGNORE INTO Media ('MediaCategoryId', 'MediaCategoryURL', 'Description
 INSERT OR IGNORE INTO Listings ('Id', 'MlsNumber', 'PublicRemarks', 'Building_StoriesTotal', 'Property_Price', 'Property_Type', 'Property_Address_AddressText', 'Property_Address_Longitude', 'Property_Address_Latitude', 'Property_Address_PermitShowAddress', 'Property_TypeId', 'Property_FarmType', 'Property_ZoningType', 'Property_PriceUnformattedValue', 'Land_SizeTotal', 'Land_SizeFrontage', 'AlternateURL_DetailsLink', 'PostalCode', 'HistoricalDataIsCleared', 'ProvinceName', 'RelativeDetailsURL', 'StatusId', 'StandardStatusId', 'PhotoChangeDateUTC', 'Distance', 'RelativeURLEn', 'RelativeURLFr', 'InsertedDateUTC', 'TimeOnRealtor', 'UploadedBy', 'Individual', 'Property_Photo', 'Media') VALUES ('<redacted>', '<redacted>', "Terre sur une sortie de l'autoroute <redacted>, première emplacement sur la sortie du Ch. St-André direction du golf de St-Luc... Plus de 3,<redacted>,<redacted> pieds carré de site stratégique GST/QST must be added to the asking price (<redacted>)", '', '$5/sqft +  GST +  QST', 'Vacant Land', 'Ch. St-André|Saint-Jean-sur-Richelieu, Quebec <redacted>', '<redacted>.<redacted>', '<redacted>.<redacted>', True, '<redacted>', 'Other', 'Agricultural', '5', '<redacted>.<redacted> sqft', '<redacted> ft', 'https://passerelle.centris.ca/redirect.aspx?CodeDest=PROPRIO&NoMLS=<redacted>&Lang=E', '<redacted>', False, 'Quebec', '/real-estate/<redacted>/ch-st-andré-saint-jean-sur-richelieu-saint-luc', '1', '1', '<redacted> 3:<redacted>:<redacted> AM', '', '/real-estate/<redacted>/ch-st-andré-saint-jean-sur-richelieu-saint-luc', '/immobilier/<redacted>/ch-st-andré-saint-jean-sur-richelieu-saint-luc', '<redacted>', '', 5, [<redacted>, <redacted>], [<redacted>], [<redacted>]);
 ```
 
+#### RealtorJSONtoSQLAnalyzer CLI
+Create a new full db from existing raw scrapes
+`python property_scraper_tools/RealtorJSONtoSQLAnalyzer.py --convert mls_raw_202* --output-database=montreal_full.sqlite`
+
+Incrementally update a minimal db from existing raw scrapes
+`python property_scraper_tools/RealtorJSONtoSQLAnalyzer.py --convert mls_raw_202* --output-database=montreal.sqlite --minimal --skip-existing-db-dates --update-output-db`
+
+
+
 # TODO
 - [ ] Efficient price storage in minimal db
   -  Kinda done but slow AF
