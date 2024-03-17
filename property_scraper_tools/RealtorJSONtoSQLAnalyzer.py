@@ -4,7 +4,7 @@ import re
 import sqlite3
 from collections import Counter
 from contextlib import closing
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from pprint import pprint
 from typing import Callable, Optional
@@ -351,12 +351,12 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
         self,
         listings: list,
         db_name: str,
-        parsed_date: date,
+        parsed_date: datetime,
         price_data: dict,
         add_computed_columns: bool = True,
         minimal_config: bool = False,
     ):
-        parsed_date_str = parsed_date.strftime("%Y-%m-%d")
+        parsed_date_str = str(parsed_date.date())
         with closing(sqlite3.connect(db_name)) as connection:
             for listing in tqdm(listings, desc=f"Rows inserted into {db_name}"):
                 self.modify_dict(listing)
@@ -445,7 +445,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
         new_db_name: str,
         raw_dbs: list[str],
         create_new_tables: bool = True,
-        db_date: Optional[date] = None,
+        db_date: Optional[datetime] = None,
         add_computed_columns: bool = True,
         minimal_config: bool = False,
         skip_existing_dates: bool = False,

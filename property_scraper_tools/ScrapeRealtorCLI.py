@@ -3,7 +3,7 @@ import json
 import logging
 import sqlite3
 from contextlib import closing
-from datetime import date
+from datetime import datetime
 from math import ceil
 from pathlib import Path
 from random import randint
@@ -28,8 +28,10 @@ class RealtorRawScraper:
         self.city = city_name
         self.create_db = create_db
         self.db_type = db_type
-        self.parse_date = date.today()
-        self.database_file = database_file if database_file else f"{city_name}_{db_type}_{self.parse_date}.sqlite"
+        self.parse_date = datetime.now()
+        self.database_file = (
+            database_file if database_file else f"{city_name}_{db_type}_{self.parse_date.date()}.sqlite"
+        )
 
         self.parsed_mls_numbers = []
 
@@ -66,7 +68,7 @@ class RealtorRawScraper:
         :return:
         """
         logger.info(response["Paging"])
-        scraped_date_str = str(self.parse_date)
+        scraped_date_str = str(self.parse_date.date())
 
         response_data = [(x["Id"], json.dumps(x), scraped_date_str) for x in response["Results"]]
         batch_of_parsed_mls_numbers = [x.get("MlsNumber") for x in response["Results"]]
