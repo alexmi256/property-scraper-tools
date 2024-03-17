@@ -7,7 +7,7 @@ from contextlib import closing
 from datetime import date, datetime
 from pathlib import Path
 from pprint import pprint
-from typing import Callable
+from typing import Callable, Optional
 
 import xxhash
 from JSONtoSQLAnalyzer import JSONtoSQLAnalyzer
@@ -25,7 +25,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
         self,
         db_file: str,
         city: str = "montreal",
-        item_mutator: Callable | None = None,
+        item_mutator: Optional[Callable] = None,
         auto_convert_simple_types: bool = False,
     ):
         super().__init__(db_file, item_mutator=item_mutator, auto_convert_simple_types=auto_convert_simple_types)
@@ -209,7 +209,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
     def get_sqlite_sql_for_dbschema_from_raw_items(
         self,
         default_table_key_name="Listings",
-        columns_to_keep: list[str] | None = None,
+        columns_to_keep: Optional[list[str]] = None,
         add_computed_columns: bool = False,
         keep_only_main_item: bool = False,
     ) -> list[str]:
@@ -266,7 +266,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
         self,
         insert_item_sql_statements: dict,
         default_table_key_name: str,
-        limit_to_columns: list[str] | None = None,
+        limit_to_columns: Optional[list[str]] = None,
     ) -> list[tuple]:
         """
         Insert the items found in the listing but discard all but the main table and keep only specific columns
@@ -316,7 +316,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                         """
         self.create_sqlite_tables_from_statements(new_db_name, [price_history_table_sql])
 
-    def get_existing_price_data(self, db_name: str, listings: None | list[int] = None) -> dict:
+    def get_existing_price_data(self, db_name: str, listings: Optional[list[int]] = None) -> dict:
         limit_to_listings = f" WHERE MlsNumber IN {tuple(listings)};" if listings else ";"
         sql = f"""
         SELECT MlsNumber,
@@ -332,7 +332,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                     price_data[row[0]] = {"price": row[1], "date": datetime.strptime(row[2], "%Y-%m-%d")}
         return price_data
 
-    def find_latest_price_date_from_db(self, db_name: str) -> datetime | None:
+    def find_latest_price_date_from_db(self, db_name: str) -> Optional[datetime]:
         sql = """
         SELECT DISTINCT Date
           FROM PriceHistory
@@ -445,7 +445,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
         new_db_name: str,
         raw_dbs: list[str],
         create_new_tables: bool = True,
-        db_date: date | None = None,
+        db_date: Optional[date] = None,
         add_computed_columns: bool = True,
         minimal_config: bool = False,
         skip_existing_dates: bool = False,

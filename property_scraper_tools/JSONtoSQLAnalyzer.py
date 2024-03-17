@@ -7,7 +7,7 @@ import time
 from collections import Counter
 from contextlib import closing
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from deepmerge import Merger
 from deepmerge_strategies import merge_counters, merge_lists_with_dict_items
@@ -34,7 +34,7 @@ class JSONtoSQLAnalyzer:
         self.auto_convert_simple_types = auto_convert_simple_types
         self.user_was_warned_about_mutators = False
 
-    def get_items_from_db(self, db_file: str | None = None, limit: int = -1) -> list[dict]:
+    def get_items_from_db(self, db_file: Optional[str] = None, limit: int = -1) -> list[dict]:
         """
         Open a previously saved raw DB and return the top X rows
 
@@ -83,7 +83,7 @@ class JSONtoSQLAnalyzer:
         return potential_ids
 
     @staticmethod
-    def cast_value_to_sqlite(value: str | bool | None) -> int | float | None:
+    def cast_value_to_sqlite(value: Union[str, bool, None]) -> Union[int, float, None]:
         """
         Casts a string data type to one that's likely to have better native support i.e. int, float
         :param value:
@@ -142,7 +142,7 @@ class JSONtoSQLAnalyzer:
     def modify_dict(
         self,
         item: dict,
-        item_path: list[str] | None = None,
+        item_path: Optional[list[str]] = None,
         came_from_a_list: bool = False,
     ) -> None:
         """
@@ -206,7 +206,7 @@ class JSONtoSQLAnalyzer:
     def modify_dict_to_counter_types(
         self,
         item: dict,
-        item_path: list[str] | None = None,
+        item_path: Optional[list[str]] = None,
         came_from_a_list: bool = False,
         counter_to_string: bool = False,
     ) -> None:
@@ -253,10 +253,10 @@ class JSONtoSQLAnalyzer:
     def split_lists_from_item(
         self,
         item: dict,
-        item_path: list[str] | None = None,
+        item_path: Optional[list[str]] = None,
         flatten=True,
-        items_to_create: dict | None = None,
-    ) -> int | str:
+        items_to_create: Optional[dict] = None,
+    ) -> Union[int, str]:
         """
         Splits up the given item into the given items_to_create dict so that each key will have a list of items to create
         WARNING: This flattens dicts by default
@@ -434,7 +434,7 @@ class JSONtoSQLAnalyzer:
 
     def convert_raw_json_db_to_sqlite(
         self,
-        new_db_name: str | None = None,
+        new_db_name: Optional[str] = None,
         limit: int = -1,
         default_table_key_name: str = "Listings",
     ):
@@ -462,7 +462,7 @@ class JSONtoSQLAnalyzer:
             connection.commit()
 
     def get_sqlite_sql_for_merged_counter_dict(
-        self, merged_item_results, default_table_key_name: str = "items", cannot_be_not_null: list[str] | None = None
+        self, merged_item_results, default_table_key_name: str = "items", cannot_be_not_null: Optional[list[str]] = None
     ) -> list[str]:
         """
         This will return you a list of SQL statements used for creating the necessary table given your derived schema
