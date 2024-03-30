@@ -27,8 +27,14 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
         city: str = "montreal",
         item_mutator: Optional[Callable] = None,
         auto_convert_simple_types: bool = False,
+        is_postgresql: bool = None,
     ):
-        super().__init__(db_file, item_mutator=item_mutator, auto_convert_simple_types=auto_convert_simple_types)
+        super().__init__(
+            db_file,
+            item_mutator=item_mutator,
+            auto_convert_simple_types=auto_convert_simple_types,
+            is_postgresql=is_postgresql,
+        )
         self.city = city
         self.minimal_columns = [
             "AlternateURL_DetailsLink",
@@ -329,6 +335,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
             with closing(connection.cursor()) as cursor:
                 rows = cursor.execute(sql).fetchall()
                 for row in rows:
+                    # FIXME?: Do we want time precision?
                     price_data[row[0]] = {"price": row[1], "date": datetime.strptime(row[2], "%Y-%m-%d")}
         return price_data
 
@@ -343,6 +350,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
             with closing(connection.cursor()) as cursor:
                 row = cursor.execute(sql).fetchone()
                 # FIXME: Return today's date if nothing found
+                # FIXME?: Do we want time precision?
                 if row:
                     return datetime.strptime(row[0], "%Y-%m-%d")
 
@@ -356,14 +364,13 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
         add_computed_columns: bool = True,
         minimal_config: bool = False,
     ):
-        parsed_date_str = str(parsed_date.date())
         with closing(sqlite3.connect(db_name)) as connection:
             for listing in tqdm(listings, desc=f"Rows inserted into {db_name}"):
                 self.modify_dict(listing)
                 computed_columns = {
                     "ComputedSQFT": None,
                     "ComputedPricePerSQFT": None,
-                    "ComputedLastUpdated": parsed_date_str,
+                    "ComputedLastUpdated": parsed_date.isoformat(),
                     "ComputedNewBuild": False,
                 }
 
@@ -431,7 +438,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                         price_history_values = [
                             listing["MlsNumber"],
                             listing["Property"]["PriceUnformattedValue"],
-                            parsed_date_str,
+                            parsed_date.isoformat(),
                         ]
                         cursor.execute(
                             sql,

@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import re
 import sqlite3
 from contextlib import closing
 from datetime import datetime
@@ -15,6 +16,9 @@ from RealtorJSONtoSQLAnalyzer import RealtorJSONtoSQLAnalyzer
 from requests import HTTPError
 from tqdm import tqdm
 from utils import CITIES, SORT_VALUES
+
+from geopy import distance
+from shapely import Point, Polygon
 
 logging.basicConfig(
     level=logging.INFO, handlers=[logging.FileHandler("scrape_realtor_cli.log"), logging.StreamHandler()]
@@ -236,6 +240,198 @@ class RealtorRawScraper:
 
         self.api.save_cookies()
 
+    def parse_raw_listings_details(self, listings: list[dict], details_db: Path):
+        with closing(sqlite3.connect(details_db)) as connection:
+            with closing(connection.cursor()) as cursor:
+                cursor.execute(
+                    "CREATE TABLE IF NOT EXISTS listings (id INTEGER PRIMARY KEY, details TEXT NOT NULL, last_updated TEXT NOT NULL)"
+                )
+                connection.commit()
+
+        with closing(sqlite3.connect(details_db)) as connection:
+            for listing in tqdm(listings):
+                # TODO: Retry mechanism
+                # TODO: Remove listings which we already have recent data for withing x days, likely via other function
+                try:
+                    # Parse the first page because it contains details about how many pages there are
+                    response = self.api.get_property_details(
+                        property_id=listing["Id"], mls_reference_number=listing["MlsNumber"]
+                    )
+                    with closing(connection.cursor()) as cursor:
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO listings (id, details, last_updated) VALUES(?, ?, ?)",
+                            [listing["Id"], json.dumps(response), datetime.now().isoformat()]
+                        )
+                        connection.commit()
+
+                except HTTPError:
+                    logger.error(f"Failed retrieving details for Mls Number {listing['MlsNumber']} ({listing['Id']})")
+                    self.cooldown(success=False)
+                finally:
+                    sleep(randint(9, 21))
+
+
+def get_listings_from_db(
+    db_file,
+    min_price: int = 100000,
+    max_price: int = 10000000,
+    must_have_int_sqft: bool = False,
+    must_have_price_change: bool = False,
+    no_new_listings: bool = True,
+    no_vacant_land: bool = True,
+    no_high_rise: bool = True,
+    within_area_of_interest: bool = True,
+    min_metro_distance_meters: int | None = None,
+    min_bedroom: int | None = None,
+    min_sqft: int = None,
+    max_price_per_sqft: int | None = None,
+    last_updated_days_ago: int | None = 7,
+    has_garage: bool = False,
+    has_parking_details: bool = False,
+    has_upcoming_openhouse: bool = False,
+    area_of_interest: Optional[list[tuple]] = None,
+    points_of_interest: Optional[list[tuple]] = None,
+    limit: int = -1,
+) -> list[dict]:
+    with closing(sqlite3.connect(db_file)) as connection:
+        # This helps maintain the row as a dict
+        connection.row_factory = sqlite3.Row
+        with closing(connection.cursor()) as cursor:
+            conditions = []
+            if no_vacant_land:
+                conditions.append(
+                    "(Property_ZoningType IS NULL OR Property_ZoningType NOT IN ('Agricultural')) AND Property_Type != 'Vacant Land'"
+                )
+            if no_high_rise:
+                conditions.append("Building_StoriesTotal IS NULL OR CAST (Building_StoriesTotal AS INTEGER) < 5")
+            if no_new_listings:
+                conditions.append("ComputedNewBuild IS NOT TRUE")
+            if must_have_int_sqft:
+                conditions.append("Building_SizeInterior IS NOT NULL")
+            if must_have_price_change:
+                # FIXME: Query the DB and find earliest date we have prices for
+                conditions.append("PriceChangeDateUTC IS NOT NULL AND DATE(PriceChangeDateUTC) > DATE('2023-11-19')")
+            if min_bedroom:
+                conditions.append(f"Building_Bedrooms IS NULL OR Building_Bedrooms >= {min_bedroom}")
+            if last_updated_days_ago:
+                conditions.append(f"DATE(ComputedLastUpdated) >= DATE('now', '-{last_updated_days_ago} day')")
+            if min_sqft:
+                conditions.append(f"ComputedSQFT IS NULL OR ComputedSQFT >= {min_sqft}")
+            if max_price_per_sqft:
+                conditions.append(f"ComputedPricePerSQFT IS NULL OR ComputedPricePerSQFT <= {max_price_per_sqft}")
+            if has_garage:
+                conditions.append(f"Property_Parking LIKE '%Garage%'")
+            elif has_parking_details:
+                conditions.append(f"Property_Parking IS NOT NULL")
+
+            conditions = [f"({x})" for x in conditions]
+
+            columns_to_select = [
+                "Id",
+                "MlsNumber",
+                "Property_Address_Latitude",
+                "Property_Address_Longitude",
+                "Property_Address_AddressText",
+            ]
+
+            where_clause = f"""
+                Property_PriceUnformattedValue > {min_price} AND 
+                Property_PriceUnformattedValue < {max_price} AND 
+                {' AND '.join(conditions)}
+            """
+
+            if has_upcoming_openhouse:
+                columns_to_select.append("FormattedDateTime")
+                columns_to_select_str = ",\n".join(columns_to_select)
+                query = f"""
+                   WITH open_house_unnested AS (
+                       SELECT MlsNumber,
+                              value AS OpenHouseGeneratedId
+                         FROM Listings,
+                              json_each(OpenHouse) 
+                        WHERE OpenHouse IS NOT NULL
+                   ),
+                   open_house_in_future AS (
+                       SELECT MlsNumber,
+                              FormattedDateTime
+                         FROM open_house_unnested
+                              JOIN
+                              OpenHouse USING (
+                                  OpenHouseGeneratedId
+                              )
+                        WHERE DATE(StartDateTime) >= DATE('now') 
+                        GROUP BY MlsNumber
+                   )
+                   SELECT {columns_to_select_str}
+                     FROM open_house_in_future
+                          JOIN
+                          Listings USING (
+                              MlsNumber
+                          )
+                   WHERE 
+                      {where_clause}
+                   """
+            else:
+                columns_to_select_str = ",\n".join(columns_to_select)
+                query = f"""
+                       SELECT {columns_to_select_str}
+                         FROM Listings
+                        WHERE 
+                            {where_clause}
+                   """
+
+            if limit != -1:
+                query += (f" LIMIT {limit}")
+
+            # WARN: Use this to rest specific properties
+            # query = 'SELECT * FROM Listings WHERE MlsNumber = 13315392'
+
+            rows = cursor.execute(query).fetchall()
+            listings = [dict(x) for x in rows]
+            logging.info(f"Received {len(listings)} listings from the DB")
+            # specific_listing = [x for x in listings if x['MlsNumber'] == 26295500]
+            # if specific_listing:
+            #     pass
+            if within_area_of_interest and area_of_interest:
+                listings = list(
+                    filter(
+                        lambda x: Polygon(area_of_interest).contains(
+                            Point(x["Property_Address_Latitude"], x["Property_Address_Longitude"])
+                        ),
+                        listings,
+                    )
+                )
+                logging.info(f"Filtered down to {len(listings)} listings because of area of interest")
+
+            if min_metro_distance_meters:
+                listings = list(
+                    filter(
+                        lambda listing: any(
+                            [
+                                distance.distance(
+                                    [listing["Property_Address_Latitude"], listing["Property_Address_Longitude"]],
+                                    poi,
+                                ).meters
+                                < min_metro_distance_meters
+                                for poi in points_of_interest
+                            ]
+                        ),
+                        listings,
+                    )
+                )
+                logging.info(f"Filtered down to {len(listings)} listings because of points of interest")
+
+            if no_high_rise:
+                listings = list(
+                    filter(
+                        lambda x: not re.search(r"\|#([5-9]\d{2}|\d{4})\|", x["Property_Address_AddressText"]),
+                        listings,
+                    )
+                )
+                logging.info(f"Filtered down to {len(listings)} listings because of high apartments")
+
+            return listings
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -271,6 +467,24 @@ if __name__ == "__main__":
         help="TODO: Analyze and create a new DB from all the results we run the first time. Only useful if you have not created a db to store items before",
     )
 
+    parser.add_argument(
+        "--raw-details",
+        action="store_true",
+        help="Save the raw details of a selection ",
+    )
+
+    parser.add_argument(
+        "--with-area-of-interest",
+        action="store_true",
+        help="When retrieving individual listing details, only look at listings within our area of interest",
+    )
+
+    parser.add_argument(
+        "--with-points-of-interest",
+        type=int,
+        help="When retrieving individual listing details, filter out any listings that are X meters farther away from points of interest",
+    )
+
     args = parser.parse_args()
 
     if not args.database.exists():
@@ -289,4 +503,55 @@ if __name__ == "__main__":
     scraper = RealtorRawScraper(
         city_name=args.city, db_type=args.store, database_file=args.database, create_db=args.new_db
     )
-    scraper.parse_listings()
+
+    if args.raw_details:
+        points_of_interest = None
+        if args.with_points_of_interest:
+            points_of_interest = []
+            # https://www.donneesquebec.ca/recherche/dataset/vmtl-stm-traces-des-lignes-de-bus-et-de-metro
+            poi_file = Path("stations.geojson")
+            if poi_file.exists():
+                with open(poi_file) as f:
+                    poi = json.load(f)
+                    points_of_interest.extend([list(reversed(x["geometry"]["coordinates"])) for x in poi["features"]])
+
+        area_of_interest = None
+        if args.with_area_of_interest:
+            area_of_interest = [
+                (45.546780742201165, -73.65807533729821),
+                (45.5241750187359, -73.67472649086267),
+                (45.51022227302072, -73.69086266029626),
+                (45.50156020795671, -73.67524147499353),
+                (45.48796289057615, -73.65258217323571),
+                (45.467741340888665, -73.61258507240564),
+                (45.45690538269222, -73.59181404579431),
+                (45.454256276138466, -73.563661579974),
+                (45.46990828260759, -73.55662346351892),
+                (45.48038065986003, -73.54512215126306),
+                (45.50601171342892, -73.5449504898861),
+                (45.53241273092978, -73.54306221473962),
+                (45.56006337665252, -73.6131000565365),
+                (45.547682377783296, -73.63163948524743),
+                (45.54972603156036, -73.65429878700525),
+            ]
+
+        relevant_listings = get_listings_from_db(
+            db_file=args.database,
+            min_price=350000,
+            max_price=700000,
+            within_area_of_interest=args.with_area_of_interest,
+            area_of_interest=area_of_interest,
+            min_metro_distance_meters=2000,
+            points_of_interest=points_of_interest,
+            min_bedroom=2,
+            min_sqft=900,
+            last_updated_days_ago=3,
+            max_price_per_sqft=700,
+            has_upcoming_openhouse=False,
+            # has_parking_details=True,
+            # has_garage=True,
+            # limit=5,
+        )
+        scraper.parse_raw_listings_details(relevant_listings, details_db=Path("listing_details_raw.sqlite"))
+    else:
+        scraper.parse_listings()

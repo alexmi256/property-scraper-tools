@@ -12,7 +12,7 @@ from typing import Callable, Optional, Union
 from deepmerge import Merger
 from deepmerge_strategies import merge_counters, merge_lists_with_dict_items
 from tqdm import tqdm
-from utils import PYTHON_TO_SQLITE_DATA_TYPES, SQLITE_RESERVED_WORDS
+from utils import PYTHON_TO_SQLITE_DATA_TYPES, SQLITE_RESERVED_WORDS, PYTHON_TO_POSTGRESQL_DATA_TYPES
 
 logging.basicConfig(level=logging.INFO)
 
@@ -25,6 +25,7 @@ class JSONtoSQLAnalyzer:
         db_file: str,
         item_mutator: Optional[Callable] = None,
         auto_convert_simple_types: bool = False,
+        is_postgresql: bool = False,
     ):
         self.created_tables = {}
         # self.items_to_create = {}
@@ -32,6 +33,7 @@ class JSONtoSQLAnalyzer:
         self.item_mutator = item_mutator
         self.db_file = db_file
         self.auto_convert_simple_types = auto_convert_simple_types
+        self.is_postgresql: bool = is_postgresql
         self.user_was_warned_about_mutators = False
 
     def get_items_from_db(self, db_file: Optional[str] = None, limit: int = -1) -> list[dict]:
@@ -82,8 +84,7 @@ class JSONtoSQLAnalyzer:
             potential_ids.insert(0, generated_id_key)
         return potential_ids
 
-    @staticmethod
-    def cast_value_to_sqlite(value: Union[str, bool, None]) -> Union[int, float, None]:
+    def cast_value_to_sqlite(self, value: Union[str, bool, None]) -> Union[int, float, None, bool]:
         """
         Casts a string data type to one that's likely to have better native support i.e. int, float
         :param value:
@@ -94,11 +95,14 @@ class JSONtoSQLAnalyzer:
             return None
         # Boolean types
         elif type(value) is bool:
-            return int(value)
+            if self.is_postgresql:
+                return value
+            else:
+                return int(value)
         # JSON boolean strings
         elif value.lower() in ["true", "false"]:
             # Just SQLite things
-            return 1 if value.lower() == "true" else 0
+            return True if value.lower() == "true" else False
         # Simple numbers
         elif re.match("-?\d+$", value):
             return int(value)
@@ -201,7 +205,7 @@ class JSONtoSQLAnalyzer:
                 # If it's a dict we need to go through this whole loop again
                 self.modify_dict(value, item_path=item_path + [key], came_from_a_list=False)
             elif self.auto_convert_simple_types and (type(value) is str or type(value) is bool):
-                item[key] = JSONtoSQLAnalyzer.cast_value_to_sqlite(value)
+                item[key] = self.cast_value_to_sqlite(value)
 
     def modify_dict_to_counter_types(
         self,
@@ -551,7 +555,11 @@ class JSONtoSQLAnalyzer:
 
                     if not most_common_type_for_column:
                         logger.error(f"Failed to determine a data type for column {column_name}")
-                    sql_column_type = PYTHON_TO_SQLITE_DATA_TYPES.get(most_common_type_for_column[0][0], "TEXT")
+
+                    db_type_conversion = (
+                        PYTHON_TO_POSTGRESQL_DATA_TYPES if self.is_postgresql else PYTHON_TO_SQLITE_DATA_TYPES
+                    )
+                    sql_column_type = db_type_conversion.get(most_common_type_for_column[0][0], "TEXT")
 
                     # WARN: For large sample sizes this is ok but could be error prone by bad luck or small sample sizes
                     should_be_not_null = (

@@ -157,6 +157,15 @@ PYTHON_TO_SQLITE_DATA_TYPES = {
     # 'list': 'JSONB',
 }
 
+PYTHON_TO_POSTGRESQL_DATA_TYPES = {
+    "int": "INTEGER",
+    "str": "TEXT",
+    "float": "REAL",
+    "bool": "BOOLEAN",
+    "datetime": "TIMESTAMP",
+    "list": "BIGINT[]",
+}
+
 CITIES = {
     "toronto": {
         "LatitudeMax": "43.89987",
