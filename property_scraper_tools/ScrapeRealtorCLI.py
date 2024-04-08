@@ -156,7 +156,7 @@ class RealtorRawScraper:
         if max_price:
             query_params['price_max'] = max_price
         if min_bedrooms:
-            query_params['min_bedrooms'] = min_bedrooms
+            query_params['bed_range'] = min_bedrooms
 
 
         coords = [
