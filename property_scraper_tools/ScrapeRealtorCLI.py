@@ -152,12 +152,11 @@ class RealtorRawScraper:
             'current_page': 1
         }
         if min_price:
-            query_params['min_price'] = min_price
+            query_params['price_min'] = min_price
         if max_price:
-            query_params['max_price'] = max_price
+            query_params['price_max'] = max_price
         if min_bedrooms:
             query_params['min_bedrooms'] = min_bedrooms
-
 
 
         coords = [
