@@ -338,7 +338,7 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 rows = cursor.execute(sql).fetchall()
                 for row in rows:
                     # FIXME?: Do we want time precision?
-                    price_data[row[0]] = {"price": row[1], "date": datetime.strptime(row[2], "%Y-%m-%d")}
+                    price_data[row[0]] = {"price": row[1], "date": datetime.strptime(row[2][:10], "%Y-%m-%d")}
         return price_data
 
     def find_latest_price_date_from_db(self, db_name: str) -> Optional[datetime]:
