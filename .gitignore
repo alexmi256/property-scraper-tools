@@ -179,3 +179,4 @@ property_scraper_tools/display_properties.py
 stations.geojson
 *.sqlite
 property-scraper-tools.tar.gz
+single_listing_counters.txt

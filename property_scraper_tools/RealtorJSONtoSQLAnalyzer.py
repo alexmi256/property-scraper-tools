@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import re
 import sqlite3
@@ -79,7 +80,8 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
 
             # The Distance KV in $ is useless so just delete it
             for key_name in ["Distance"]:
-                del item[key_name]
+                if key_name in item:
+                    del item[key_name]
 
             # This is for that 1/16000 listings that are not numbers but a valid Letter + Number
             if "MlsNumber" in item:
@@ -641,7 +643,7 @@ if __name__ == "__main__":
 
     if args.analyze:
         merged_items = analyzer.convert_raw_db_to_json_and_merge_to_get_raw_schema()
-        pprint(merged_items)
+        print(json.dumps(merged_items, indent=2))
         if args.print_sql:
             results = {}
             # WARNING: This is what flattens our dict item by default

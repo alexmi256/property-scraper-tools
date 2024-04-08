@@ -139,7 +139,9 @@ class RealtorRawScraper:
 
         logger.info(f'Parsed {self.total_parsed}/{response["Paging"]["TotalRecords"]}')
 
-    def parse_listings(self):
+    def parse_listings(
+        self, min_price: Optional[int] = None, max_price: Optional[int] = None, min_bedrooms: Optional[int] = None
+    ):
         latitude_min = CITIES[self.city]["LatitudeMin"]
         latitude_max = CITIES[self.city]["LatitudeMax"]
         longitude_min = CITIES[self.city]["LongitudeMin"]
@@ -208,6 +210,9 @@ class RealtorRawScraper:
                         latitude_max,
                         longitude_min,
                         longitude_max,
+                        price_min=min_price,
+                        price_max=max_price,
+                        bed_range=min_bedrooms,
                         current_page=page_number,
                         sort=sort_value,
                     )
@@ -241,6 +246,7 @@ class RealtorRawScraper:
         self.api.save_cookies()
 
     def parse_raw_listings_details(self, listings: list[dict], details_db: Path):
+        previously_parsed_ids = []
         with closing(sqlite3.connect(details_db)) as connection:
             with closing(connection.cursor()) as cursor:
                 cursor.execute(
@@ -248,8 +254,16 @@ class RealtorRawScraper:
                 )
                 connection.commit()
 
+            with closing(connection.cursor()) as cursor:
+                results = cursor.execute("SELECT id FROM listings").fetchall()
+                if results:
+                    previously_parsed_ids = [x[0] for x in results]
+
         with closing(sqlite3.connect(details_db)) as connection:
             for listing in tqdm(listings):
+                if listing["Id"] in previously_parsed_ids:
+                    logger.debug(f"Already parsed {listing['Id']}")
+                    continue
                 # TODO: Retry mechanism
                 # TODO: Remove listings which we already have recent data for withing x days, likely via other function
                 try:
@@ -260,15 +274,15 @@ class RealtorRawScraper:
                     with closing(connection.cursor()) as cursor:
                         cursor.execute(
                             "INSERT OR REPLACE INTO listings (id, details, last_updated) VALUES(?, ?, ?)",
-                            [listing["Id"], json.dumps(response), datetime.now().isoformat()]
+                            [listing["Id"], json.dumps(response), datetime.now().isoformat()],
                         )
                         connection.commit()
 
-                except HTTPError:
+                except Exception:
                     logger.error(f"Failed retrieving details for Mls Number {listing['MlsNumber']} ({listing['Id']})")
                     self.cooldown(success=False)
                 finally:
-                    sleep(randint(9, 21))
+                    sleep(randint(7, 17))
 
 
 def get_listings_from_db(
@@ -381,7 +395,7 @@ def get_listings_from_db(
                    """
 
             if limit != -1:
-                query += (f" LIMIT {limit}")
+                query += f" LIMIT {limit}"
 
             # WARN: Use this to rest specific properties
             # query = 'SELECT * FROM Listings WHERE MlsNumber = 13315392'
@@ -480,9 +494,31 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--with-points-of-interest",
+        "--near-poi-distance",
         type=int,
         help="When retrieving individual listing details, filter out any listings that are X meters farther away from points of interest",
+    )
+
+    parser.add_argument(
+        "--max-price",
+        type=int,
+        default=2000000,
+        help="When scraping listings, search for listings only below this price",
+    )
+
+    parser.add_argument(
+        "--min-price",
+        type=int,
+        default=300000,
+        help="When scraping listings, search for listings only above this price",
+    )
+
+    parser.add_argument(
+        "--min-bedrooms",
+        type=int,
+        choices=[1, 2, 3, 4, 5],
+        default=1,
+        help="When scraping listings, search for listings with bedrooms only equal to or above this price",
     )
 
     args = parser.parse_args()
@@ -504,9 +540,18 @@ if __name__ == "__main__":
         city_name=args.city, db_type=args.store, database_file=args.database, create_db=args.new_db
     )
 
+    parse_options = {}
+    if args.min_price:
+        parse_options['min_price'] = args.min_price
+    if args.max_price:
+        parse_options['max_price'] = args.max_price
+    if args.min_bedrooms:
+        parse_options['min_bedrooms'] = f'{args.min_bedrooms}-0'
+
+
     if args.raw_details:
         points_of_interest = None
-        if args.with_points_of_interest:
+        if args.near_poi_distance:
             points_of_interest = []
             # https://www.donneesquebec.ca/recherche/dataset/vmtl-stm-traces-des-lignes-de-bus-et-de-metro
             poi_file = Path("stations.geojson")
@@ -537,16 +582,16 @@ if __name__ == "__main__":
 
         relevant_listings = get_listings_from_db(
             db_file=args.database,
-            min_price=350000,
-            max_price=700000,
-            within_area_of_interest=args.with_area_of_interest,
+            min_price=args.min_price,
+            max_price=args.max_price,
+            within_area_of_interest=args.near_poi_distance,
             area_of_interest=area_of_interest,
-            min_metro_distance_meters=2000,
+            min_metro_distance_meters=args.near_poi_distance,
             points_of_interest=points_of_interest,
-            min_bedroom=2,
-            min_sqft=900,
-            last_updated_days_ago=3,
-            max_price_per_sqft=700,
+            # min_bedroom=2,
+            # min_sqft=600,
+            last_updated_days_ago=2,
+            # max_price_per_sqft=700,
             has_upcoming_openhouse=False,
             # has_parking_details=True,
             # has_garage=True,
@@ -554,4 +599,4 @@ if __name__ == "__main__":
         )
         scraper.parse_raw_listings_details(relevant_listings, details_db=Path("listing_details_raw.sqlite"))
     else:
-        scraper.parse_listings()
+        scraper.parse_listings(**parse_options)

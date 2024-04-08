@@ -1,6 +1,7 @@
 """ Contains all queries to the Realtor.ca API and OpenStreetMap."""
 
 import json
+from typing import Optional
 
 import requests
 
@@ -35,7 +36,7 @@ class RealtorAPI:
                 cookies_dict = {k: v for k, v in [x.strip().split("=", 1) for x in cookies_string.split(";")]}
                 return cookies_dict
 
-    def get_coordinates(self, city):
+    def get_coordinates(self, city: str):
         """Gets the coordinate bounds of a city from OpenStreetMap."""
 
         url = "https://nominatim.openstreetmap.org/search?q=" + city + "&format=json"
@@ -54,13 +55,14 @@ class RealtorAPI:
         lat_max,
         long_min,
         long_max,
-        price_min=0,
-        price_max=50000000,
-        records_per_page=200,
-        culture_id=1,
-        current_page=1,
-        application_id=1,
+        price_min: int = 0,
+        price_max: int = 50000000,
+        records_per_page: int = 200,
+        culture_id: int = 1,
+        current_page: int = 1,
+        application_id: int = 1,
         sort="6-D",
+        bed_range: Optional[str] = None,
     ):
         """Queries the Realtor.ca API to get a list of properties."""
 
@@ -84,6 +86,9 @@ class RealtorAPI:
             "ApplicationId": application_id,
             "Version": "7.0",
         }
+        if bed_range:
+            # This should be in the form of \d-\d where the second can be 0 for +
+            form["BedRange"] = bed_range
         response = self.session.post(url=url, data=form, timeout=10)
         if response.status_code == 403:
             print("Error 403: Rate limited")
