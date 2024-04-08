@@ -140,31 +140,33 @@ class RealtorRawScraper:
         logger.info(f'Parsed {self.total_parsed}/{response["Paging"]["TotalRecords"]}')
 
     def parse_listings(
-        self, min_price: Optional[int] = None, max_price: Optional[int] = None, min_bedrooms: Optional[int] = None
+        self,
+        min_price: Optional[int] = None,
+        max_price: Optional[int] = None,
+        min_bedrooms: Optional[int] = None,
+        coordinates: Optional[dict[str, str]] = None,
     ):
-        latitude_min = CITIES[self.city]["LatitudeMin"]
-        latitude_max = CITIES[self.city]["LatitudeMax"]
-        longitude_min = CITIES[self.city]["LongitudeMin"]
-        longitude_max = CITIES[self.city]["LongitudeMax"]
+        if coordinates:
+            latitude_min = coordinates["LatitudeMin"]
+            latitude_max = coordinates["LatitudeMax"]
+            longitude_min = coordinates["LongitudeMin"]
+            longitude_max = coordinates["LongitudeMax"]
+        else:
+            latitude_min = CITIES[self.city]["LatitudeMin"]
+            latitude_max = CITIES[self.city]["LatitudeMax"]
+            longitude_min = CITIES[self.city]["LongitudeMin"]
+            longitude_max = CITIES[self.city]["LongitudeMax"]
+
         raw_responses = []
 
-        query_params = {
-            'current_page': 1
-        }
+        query_params = {"current_page": 1}
         if min_price:
-            query_params['price_min'] = min_price
+            query_params["price_min"] = min_price
         if max_price:
-            query_params['price_max'] = max_price
+            query_params["price_max"] = max_price
         if min_bedrooms:
-            query_params['bed_range'] = min_bedrooms
+            query_params["bed_range"] = min_bedrooms
 
-
-        coords = [
-            latitude_min,
-            latitude_max,
-            longitude_min,
-            longitude_max,
-        ]
         total_pages = 1
 
         try:
@@ -174,7 +176,9 @@ class RealtorRawScraper:
             )
 
         except HTTPError:
-            logger.error(f"Failed retrieving response for first page of {self.city} ({coords})")
+            logger.error(
+                f"Failed retrieving response for first page of {self.city} ({latitude_min}, {latitude_max}, {longitude_min}, {longitude_max})"
+            )
             self.connection.close()
             raise
 
@@ -209,8 +213,8 @@ class RealtorRawScraper:
 
         # WARN: We can't seem to go past 50 pages, when this happens we get back zero results
         for page_number, sort_name in tqdm(pages_to_parse):
-            query_params['sort'] = SORT_VALUES[sort_name]
-            query_params['current_page'] = page_number
+            query_params["sort"] = SORT_VALUES[sort_name]
+            query_params["current_page"] = page_number
 
             logger.info(f"Parsing page #{page_number} going by {sort_name} order")
             success = False
@@ -219,11 +223,7 @@ class RealtorRawScraper:
             while not success:
                 try:
                     response = self.api.get_property_list(
-                        latitude_min,
-                        latitude_max,
-                        longitude_min,
-                        longitude_max,
-                        **query_params
+                        latitude_min, latitude_max, longitude_min, longitude_max, **query_params
                     )
 
                     # Insert the date for the current page
@@ -530,6 +530,12 @@ if __name__ == "__main__":
         help="When scraping listings, search for listings with bedrooms only equal to or above this price",
     )
 
+    parser.add_argument(
+        "--coordinates",
+        type=str,
+        help="When scraping listings, limit to these coordinates in the form of lat-min,lat-max,long-min,long-max",
+    )
+
     args = parser.parse_args()
 
     if not args.database.exists():
@@ -551,12 +557,19 @@ if __name__ == "__main__":
 
     parse_options = {}
     if args.min_price:
-        parse_options['min_price'] = args.min_price
+        parse_options["min_price"] = args.min_price
     if args.max_price:
-        parse_options['max_price'] = args.max_price
+        parse_options["max_price"] = args.max_price
     if args.min_bedrooms:
-        parse_options['min_bedrooms'] = f'{args.min_bedrooms}-0'
-
+        parse_options["min_bedrooms"] = f"{args.min_bedrooms}-0"
+    if args.coordinates and len(args.coordinates.split(",")) == 4:
+        coordinates = args.coordinates.split(",")
+        parse_options["coordinates"] = {
+            "LatitudeMin": coordinates[0],
+            "LatitudeMax": coordinates[1],
+            "LongitudeMin": coordinates[2],
+            "LongitudeMax": coordinates[3],
+        }
 
     if args.raw_details:
         points_of_interest = None
