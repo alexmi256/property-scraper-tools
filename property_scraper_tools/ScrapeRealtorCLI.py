@@ -148,6 +148,18 @@ class RealtorRawScraper:
         longitude_max = CITIES[self.city]["LongitudeMax"]
         raw_responses = []
 
+        query_params = {
+            'current_page': 1
+        }
+        if min_price:
+            query_params['min_price'] = min_price
+        if max_price:
+            query_params['max_price'] = max_price
+        if min_bedrooms:
+            query_params['min_bedrooms'] = min_bedrooms
+
+
+
         coords = [
             latitude_min,
             latitude_max,
@@ -159,7 +171,7 @@ class RealtorRawScraper:
         try:
             # Parse the first page because it contains details about how many pages there are
             response = self.api.get_property_list(
-                latitude_min, latitude_max, longitude_min, longitude_max, current_page=1
+                latitude_min, latitude_max, longitude_min, longitude_max, **query_params
             )
 
         except HTTPError:
@@ -198,7 +210,9 @@ class RealtorRawScraper:
 
         # WARN: We can't seem to go past 50 pages, when this happens we get back zero results
         for page_number, sort_name in tqdm(pages_to_parse):
-            sort_value = SORT_VALUES[sort_name]
+            query_params['sort'] = SORT_VALUES[sort_name]
+            query_params['current_page'] = page_number
+
             logger.info(f"Parsing page #{page_number} going by {sort_name} order")
             success = False
             attempts = 1
@@ -210,11 +224,7 @@ class RealtorRawScraper:
                         latitude_max,
                         longitude_min,
                         longitude_max,
-                        price_min=min_price,
-                        price_max=max_price,
-                        bed_range=min_bedrooms,
-                        current_page=page_number,
-                        sort=sort_value,
+                        **query_params
                     )
 
                     # Insert the date for the current page
