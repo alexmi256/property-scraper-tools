@@ -420,7 +420,10 @@ class RealtorJSONtoSQLAnalyzer(JSONtoSQLAnalyzer):
                 with closing(connection.cursor()) as cursor:
                     # Insert the items
                     for statement in statements:
-                        cursor.execute(statement[0], statement[1])
+                        try:
+                            cursor.execute(statement[0], statement[1])
+                        except sqlite3.OperationalError:
+                            logger.error(f'Failed to insert row:\n{statement[0]}\n{statement[1]}')
 
                     # only insert price history if we don't have data for the current listing OR
                     # the price differs and the db date is greater than what the last saved price was

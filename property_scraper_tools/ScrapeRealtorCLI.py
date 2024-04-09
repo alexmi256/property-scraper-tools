@@ -533,7 +533,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--coordinates",
         type=str,
-        help="When scraping listings, limit to these coordinates in the form of lat-min,lat-max,long-min,long-max",
+        help="When scraping listings, limit to these coordinates in the form of lat-min,lat-max,long-min,long-max. Example: 45.32822,45.78688,-74.48068,-72.96525",
     )
 
     args = parser.parse_args()
